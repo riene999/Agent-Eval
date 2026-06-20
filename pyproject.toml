@@ -1,0 +1,16 @@
+[project]
+name = "agent-eval"
+version = "0.1.0"
+description = "Agent evaluation harness measuring accuracy, token efficiency, and trajectory conciseness on tau-bench."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "httpx>=0.27",
+    "pydantic>=2.6",
+    "openai>=1.30",
+]
+
+[tool.uv]
+package = false
