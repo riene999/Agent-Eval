@@ -100,20 +100,87 @@ def to_markdown(rows: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _bar(value: float, vmax: float, width: int = 5) -> str:
+    """把数值画成定宽的实心/空心方块条,便于一眼比大小。"""
+    if vmax <= 0:
+        return "▱" * width
+    n = min(width, max(1, round(value / vmax * width)))
+    return "▰" * n + "▱" * (width - n)
+
+
+def _light(value: float, good: float, ok: float, higher_better: bool) -> str:
+    """按阈值给红绿灯:higher_better 决定方向。"""
+    if higher_better:
+        return "🟢" if value >= good else ("🟡" if value >= ok else "🔴")
+    return "🟢" if value <= good else ("🟡" if value <= ok else "🔴")
+
+
 def build_report(meta: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
-    """把一批运行的元信息 + 三轴指标表渲染成一份 markdown 报告。"""
-    head = [f"# 评测报告 {meta.get('run_id', '')}", ""]
+    """渲染一份"外行也能一眼看好坏"的 markdown 报告:红绿灯总览 + 每题表 + 图例。"""
+    title = f"# 评测报告 {meta.get('run_id', '')}"
+    if not rows:
+        return f"{title}\n\n(无数据)\n"
+
+    n = len(rows)
+    n_pass = sum(r["accuracy"] for r in rows)
+    acc = n_pass / n
+    avg_tok = sum(r["total_tokens"] for r in rows) / n
+    avg_calls = sum(r["tool_call_count"] for r in rows) / n
+    avg_red = sum(r["redundant_call_rate"] for r in rows) / n
+
+    info = []
     for label, key in [("agent", "agent_id"), ("模型", "model"), ("split", "split"),
                        ("题数", "count"), ("时间", "timestamp")]:
-        val = meta.get(key)
-        if val is not None:
-            head.append(f"- {label}: {val}")
-    head += ["", "## 三轴指标", "", to_markdown(rows), ""]
-    if meta.get("per_task"):
-        head += ["## 每题结果", ""]
-        for tid, verdict in meta["per_task"]:
-            head.append(f"- `{tid}`: success={verdict.get('success')} — {verdict.get('reason', '')}")
-    return "\n".join(head)
+        if meta.get(key) is not None:
+            info.append(f"{label}={meta[key]}")
+
+    lines = [title, ""]
+    if info:
+        lines += ["> " + " · ".join(info), ""]
+    lines += [
+        "## 总览",
+        "",
+        f"- 准确率 {_light(acc, 0.8, 0.5, True)} **{acc:.0%}**（{n_pass}/{n} 通过)",
+        f"- 平均冗余率 {_light(avg_red, 0.05, 0.20, False)} {avg_red:.1%}",
+        f"- 平均 token/题 {avg_tok:,.0f} · 平均工具/题 {avg_calls:.1f} "
+        f"（成本轴:越低越省,需跨配置对比才见高下)",
+        "",
+        "## 每题指标",
+        "",
+        "| 题 | 结果 | token(本批相对) | 工具 | 冗余 |",
+        "| --- | :---: | --- | ---: | :---: |",
+    ]
+
+    tokens = [r["total_tokens"] for r in rows]
+    tmax = max(tokens) or 1
+    lo, span = min(tokens), (max(tokens) - min(tokens)) or 1
+    for r in rows:
+        tok = r["total_tokens"]
+        res = "✅" if r["accuracy"] else "❌"
+        tok_light = _light(tok, lo + span / 3, lo + 2 * span / 3, False)
+        red = r["redundant_call_rate"]
+        red_light = _light(red, 0.05, 0.20, False)
+        short = r["task_id"].replace("tau_retail_", "")
+        lines.append(
+            f"| {short} | {res} | {tok_light} {_bar(tok, tmax)} {tok / 1000:.0f}k "
+            f"| {r['tool_call_count']} | {red_light} {red:.0%} |"
+        )
+    lines.append("")
+
+    fails = [(tid, v) for tid, v in meta.get("per_task", []) if not v.get("success")]
+    if fails:
+        lines += ["## 失败的题(原因)", ""]
+        lines += [f"- `{tid}`: {v.get('reason', '')}" for tid, v in fails]
+        lines.append("")
+
+    lines += [
+        "## 图例",
+        "- 结果:✅ 通过 / ❌ 失败",
+        "- 准确率灯:🟢 ≥80% / 🟡 ≥50% / 🔴 <50%",
+        "- token 条:越长越费;🟢🟡🔴 = 本批内相对(便宜/中等/偏贵),成本轴无绝对好坏",
+        "- 冗余灯:🟢 ≤5% / 🟡 ≤20% / 🔴 >20%(相同参数重复调同一工具的占比)",
+    ]
+    return "\n".join(lines)
 
 
 def main(argv: List[str] | None = None) -> None:

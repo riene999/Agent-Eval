@@ -28,15 +28,15 @@ from tasks.base import Task
 logger = logging.getLogger(__name__)
 
 
-def make_agent(name: str) -> BaseAgent:
+def make_agent(name: str, model: Optional[str] = None) -> BaseAgent:
     if name == "echo":
         from agents.echo_agent import EchoAgent
 
-        return EchoAgent()
+        return EchoAgent()  # echo 不调模型,忽略 model
     if name == "react":
         from agents.react_agent import ReactAgent
 
-        return ReactAgent()
+        return ReactAgent(model=model)
     raise SystemExit(f"未知 agent: {name!r}(可选:echo, react)")
 
 
@@ -99,6 +99,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
     parser = argparse.ArgumentParser(description="运行一组或一批 (agent, task)")
     parser.add_argument("--agent", required=True, help="agent 名:echo | react")
+    parser.add_argument("--model", default=None,
+                        help="被测 agent 使用的模型;不填则用 .env 的 AGENT_MODEL")
     parser.add_argument("--task", default=None, help="单题 id:echo | math | tau_retail_XXX")
     parser.add_argument("--tasks", default=None, help="逗号分隔的多个 task id,批量跑")
     parser.add_argument("--split", default="test", choices=["test", "train", "dev"],
@@ -110,7 +112,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parser.parse_args(argv)
 
     task_ids = resolve_task_ids(args)
-    agent = make_agent(args.agent)
+    agent = make_agent(args.agent, args.model)
     run_id = args.run_id or uuid4().hex[:12]
 
     results: list[tuple[str, Dict[str, Any]]] = []

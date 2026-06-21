@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import threading
@@ -29,6 +31,9 @@ EventType = Literal["llm_call", "tool_call", "tool_return", "final_output"]
 
 # 项目根目录:本文件位于 <root>/proxy/recorder.py
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# 超过该字节数的事件字段会被外置为内容寻址 blob(见 blobify),其余内联
+BLOB_THRESHOLD_BYTES = int(os.getenv("BLOB_THRESHOLD_BYTES", "1024"))
 
 
 class Event(BaseModel):
@@ -197,6 +202,62 @@ def read_events(agent_id: str, task_id: str, run_id: str) -> List[Event]:
                 events.append(Event.model_validate_json(line))
     events.sort(key=lambda e: e.seq)
     return events
+
+
+# --------------------------------------------------------------------------- #
+# 内容寻址 blob:大字段外置存盘,按 sha256 去重(重复的 wiki/历史消息只存一份)
+# --------------------------------------------------------------------------- #
+
+
+def blob_root() -> Path:
+    return traj_root() / "blobs"
+
+
+def _blob_path(digest: str) -> Path:
+    # 前 2 位 fan-out,避免单目录文件过多
+    return blob_root() / digest[:2] / f"{digest}.json"
+
+
+def put_blob(content: Any) -> Dict[str, Any]:
+    """按 sha256 把内容写入 blob store(已存在则跳过),返回引用。
+
+    内容寻址 → 相同内容同一路径,写入天然幂等;用临时文件 + 原子 rename 落盘,
+    因而无需像 jsonl 那样加锁,proxy 与 wrapper 两个进程可安全并发写。
+    """
+    raw = json.dumps(content, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()
+    path = _blob_path(digest)
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{digest}.{uuid4().hex}.tmp")
+        tmp.write_bytes(raw)
+        tmp.replace(path)
+    return {"$blob": digest, "bytes": len(raw)}
+
+
+def blobify(value: Any, threshold: int = BLOB_THRESHOLD_BYTES) -> Any:
+    """超过阈值的值外置为 blob 引用,否则原样内联。"""
+    try:
+        size = len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+    except (TypeError, ValueError):
+        return value
+    return put_blob(value) if size > threshold else value
+
+
+def _load_blob(digest: str) -> Any:
+    return json.loads(_blob_path(digest).read_text(encoding="utf-8"))
+
+
+def rehydrate(obj: Any) -> Any:
+    """递归把 {"$blob": ...} 引用还原成原始内容;非引用原样返回(对旧轨迹透明)。"""
+    if isinstance(obj, dict):
+        digest = obj.get("$blob")
+        if isinstance(digest, str):
+            return rehydrate(_load_blob(digest))
+        return {k: rehydrate(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [rehydrate(v) for v in obj]
+    return obj
 
 
 # --------------------------------------------------------------------------- #

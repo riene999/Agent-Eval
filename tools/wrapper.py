@@ -14,7 +14,7 @@ import logging
 import time
 from typing import Any, Callable, Dict, Tuple, TypeVar
 
-from proxy.recorder import append_event, current_context
+from proxy.recorder import append_event, blobify, current_context
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ def traced_tool(fn: F) -> F:
             task_id=ctx.task_id,
             run_id=ctx.run_id,
             event_type="tool_call",
-            data={"tool_name": tool_name, "args": _bind_args(fn, args, kwargs)},
+            data={"tool_name": tool_name, "args": blobify(_bind_args(fn, args, kwargs))},
         )
         start = time.perf_counter()
         error = None
@@ -83,7 +83,7 @@ def traced_tool(fn: F) -> F:
                 event_type="tool_return",
                 data={
                     "tool_name": tool_name,
-                    "result": _json_safe(result),
+                    "result": blobify(_json_safe(result)),
                     "error": error,
                     "latency_ms": round((time.perf_counter() - start) * 1000.0, 3),
                 },

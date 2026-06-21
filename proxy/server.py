@@ -10,16 +10,18 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import Body, FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from proxy.recorder import append_event, load_env
+from proxy.recorder import PROJECT_ROOT, append_event, blobify, load_env
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +81,12 @@ def _record_llm_call(
     latency_ms: float,
 ) -> None:
     usage = response_body.get("usage") or {}
-    choices = response_body.get("choices") or [{}]
-    message = choices[0].get("message") if choices else None
+    # 完整请求体:逐条消息 + tools schema 大则外置为 blob,其余字段(model/温度等)内联
+    request = dict(payload)
+    if isinstance(request.get("messages"), list):
+        request["messages"] = [blobify(m) for m in request["messages"]]
+    if "tools" in request:
+        request["tools"] = blobify(request["tools"])
     append_event(
         agent_id=trace["agent_id"],
         task_id=trace["task_id"],
@@ -89,8 +95,8 @@ def _record_llm_call(
         data={
             "role": trace["role"],
             "model": payload.get("model"),
-            "messages": payload.get("messages"),
-            "response": message,
+            "request": request,
+            "response": blobify(response_body),
             "prompt_tokens": usage.get("prompt_tokens", 0),
             "completion_tokens": usage.get("completion_tokens", 0),
             "latency_ms": round(latency_ms, 3),
@@ -98,13 +104,45 @@ def _record_llm_call(
     )
 
 
+def _load_routes() -> Dict[str, Any]:
+    """读 models.json:{模型名: {base_url, api_key}}。不存在/坏了则返回空(走 .env 回退)。"""
+    path = Path(os.getenv("MODELS_CONFIG") or (PROJECT_ROOT / "models.json"))
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("models.json 解析失败,本次回退到 .env 的 UPSTREAM_*")
+        return {}
+
+
+def _resolve_upstream(model: str) -> tuple[str, str]:
+    """按模型名路由到 (base_url, api_key);models.json 未配则回退 .env 的 UPSTREAM_*。"""
+    route = _load_routes().get(model)
+    if route:
+        return route.get("base_url", "").rstrip("/"), route.get("api_key", "")
+    return (
+        os.environ.get("UPSTREAM_BASE_URL", "https://api.deepseek.com").rstrip("/"),
+        os.environ.get("UPSTREAM_API_KEY", ""),
+    )
+
+
 def _forward_upstream(payload: Dict[str, Any]) -> tuple[int, Dict[str, Any]]:
-    base = os.environ.get("UPSTREAM_BASE_URL", "https://api.deepseek.com").rstrip("/")
-    api_key = os.environ.get("UPSTREAM_API_KEY", "")
+    base, api_key = _resolve_upstream(payload.get("model", ""))
     url = f"{base}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    with httpx.Client(timeout=_UPSTREAM_TIMEOUT_S) as client:
-        resp = client.post(url, json=payload, headers=headers)
+    try:
+        with httpx.Client(timeout=_UPSTREAM_TIMEOUT_S) as client:
+            resp = client.post(url, json=payload, headers=headers)
+    except Exception as e:
+        # 连不上上游(DNS/TLS/超时等):返回清晰的 502,而不是裸 500
+        logger.warning("连接上游失败 %s: %r", url, e)
+        return 502, {
+            "error": {
+                "message": f"无法连接上游 {url}: {e!r}",
+                "type": "upstream_connection_error",
+            }
+        }
     try:
         body = resp.json()
     except Exception:
