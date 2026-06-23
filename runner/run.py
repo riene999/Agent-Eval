@@ -56,8 +56,54 @@ def make_task(task_id: str) -> Task:
     raise SystemExit(f"未知 task: {task_id!r}(可选:echo, math, tau_retail_XXX)")
 
 
-def run_one(agent: BaseAgent, task: Task, run_id: str) -> Dict[str, Any]:
-    """执行一次 (agent, task),返回 judge 结果。"""
+def _should_attribute(mode: Optional[str], in_sample: bool, success: bool) -> bool:
+    if mode == "all":
+        return True
+    if mode == "failed_only":
+        return not success
+    if mode == "sample":
+        return in_sample
+    return False
+
+
+def _run_evaluator(
+    kind: str,
+    model: Optional[str],
+    agent: BaseAgent,
+    task: Task,
+    run_id: str,
+    verdict: Dict[str, Any],
+) -> None:
+    """跑一个评测器,结果追加为同名事件;best-effort,失败不拖垮主流程。"""
+    events = read_events(agent.agent_id, task.task_id, run_id)
+    try:
+        if kind == "llm_judge":
+            from evaluators.llm_judge import LlmJudge
+
+            data = LlmJudge(model).evaluate(task, events, verdict)
+        else:
+            from evaluators.attributor import Attributor
+
+            data = Attributor(model).evaluate(task, events, verdict)
+    except Exception as e:
+        logger.warning("%s 评测失败: %r", kind, e)
+        data = {"error": repr(e)}
+    append_event(
+        agent_id=agent.agent_id, task_id=task.task_id, run_id=run_id, event_type=kind, data=data
+    )
+
+
+def run_one(
+    agent: BaseAgent,
+    task: Task,
+    run_id: str,
+    *,
+    llm_judge: bool = False,
+    attribution_mode: Optional[str] = None,
+    in_sample: bool = False,
+    judge_model: Optional[str] = None,
+) -> Dict[str, Any]:
+    """执行一次 (agent, task),判分,并按需跑可选的 LLM 评测/归因。"""
     logger.info("开始运行 agent=%s task=%s run_id=%s", agent.agent_id, task.task_id, run_id)
     with run_context(run_id, agent.agent_id, task.task_id):
         result = agent.run(task, run_id)
@@ -75,6 +121,12 @@ def run_one(agent: BaseAgent, task: Task, run_id: str) -> Dict[str, Any]:
                 "error": result.get("error"),
             },
         )
+        if llm_judge:
+            _run_evaluator("llm_judge", judge_model, agent, task, run_id, verdict)
+        if attribution_mode and _should_attribute(
+            attribution_mode, in_sample, bool(verdict.get("success"))
+        ):
+            _run_evaluator("attribution", judge_model, agent, task, run_id, verdict)
     return verdict
 
 
@@ -109,11 +161,37 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     parser.add_argument("--count", type=int, default=None,
                         help="从 --start 起批量跑多少道 tau 题")
     parser.add_argument("--run-id", default=None, help="不指定则自动生成;批量时作为本批共同标签")
+    parser.add_argument("--llm-judge", action="store_true", help="开启 LLM-as-judge 质量打分")
+    parser.add_argument("--attribution", action="store_true", help="开启错误归因")
+    parser.add_argument("--attribution-mode", default="failed_only",
+                        help="failed_only(默认) | all | sample_N")
+    parser.add_argument("--judge-model", default=None,
+                        help="评测/归因用模型;默认复用 --model / AGENT_MODEL")
     args = parser.parse_args(argv)
 
     task_ids = resolve_task_ids(args)
     agent = make_agent(args.agent, args.model)
     run_id = args.run_id or uuid4().hex[:12]
+
+    # 归因策略:failed_only / all / sample_N(随机抽 N 道做归因)
+    judge_model = args.judge_model or args.model
+    attribution_mode: Optional[str] = None
+    sampled: set[str] = set()
+    if args.attribution:
+        m = args.attribution_mode
+        if m in ("failed_only", "all"):
+            attribution_mode = m
+        elif m.startswith("sample_"):
+            try:
+                n = int(m.split("_", 1)[1])
+            except ValueError:
+                raise SystemExit(f"--attribution-mode 形如 sample_N,得到: {m!r}")
+            import random
+
+            attribution_mode = "sample"
+            sampled = set(random.sample(task_ids, min(n, len(task_ids))))
+        else:
+            raise SystemExit(f"未知 --attribution-mode: {m!r}")
 
     results: list[tuple[str, Dict[str, Any]]] = []
     for tid in task_ids:
@@ -122,7 +200,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         path = trajectory_path(agent.agent_id, task.task_id, run_id)
         if path.exists():
             path.unlink()
-        verdict = run_one(agent, task, run_id)
+        verdict = run_one(
+            agent, task, run_id,
+            llm_judge=args.llm_judge,
+            attribution_mode=attribution_mode,
+            in_sample=(tid in sampled),
+            judge_model=judge_model,
+        )
         results.append((task.task_id, verdict))
 
     from analysis.metrics import build_report, compute_metrics, to_markdown

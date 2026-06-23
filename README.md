@@ -1,14 +1,26 @@
 # agent-eval
 
-在 τ-bench 上对不同 Agent 配置做评测的最小框架。与多数只测"对不对"(outcome)的
-评测不同,本项目额外补两个效率维度,产出 **三轴**对比:
+在 τ-bench 上对 Agent 配置做**多维度**评测的最小框架。与多数只测"对不对"(outcome)的评测不同,本项目额外补两个效率维度,产出**三轴**对比:
 
-- **准确率轴**:任务是否做对(τ-bench 官方判分);
-- **Token 效率轴**:做对的同时用了多少 token;
-- **轨迹简洁度轴**:做对的同时走了多少弯路(工具调用次数、冗余调用率)。
+- **准确率**:任务是否做对(τ-bench 官方判分)
+- **Token 效率**:做对的同时用了多少 token(只计被测 Agent,排除用户模拟器/评测器)
+- **轨迹简洁度**:工具调用次数、冗余调用率(走了多少弯路)
 
-闭环由四部分组成:OpenAI 兼容的**本地代理**(记录每次 LLM 调用)、工具 **wrapper**
-(记录每次工具调用)、自写 **ReAct Agent**、以及把上述事件落成 JSONL 后的**离线分析**。
+可选再叠加两层 LLM 维度的洞察:**LLM-as-judge**(质量打分)与**错误归因**(定位从哪一步开始偏离)。
+
+## 架构总览
+
+```
+                      ┌─ tools/wrapper.py  @traced_tool ──┐ 记录 tool_call / tool_return
+runner ─ ReAct Agent ─┤                                    ├─→ trajectories/.../{run}.jsonl
+                      └─ proxy(OpenAI 兼容)──────────────┘ 记录 llm_call(转发到真实厂商)
+                              │ 按 model 名路由(models.json)→ DeepSeek / 智谱 / 通义 …
+跑后(可选)            ├─ LLM-judge   → llm_judge 事件
+                              └─ 错误归因     → attribution 事件
+analysis/metrics.py ── 读 JSONL → 三轴指标 + 红绿灯 markdown 报告
+```
+
+四类核心事件 `llm_call / tool_call / tool_return / final_output` 构成 Agent 轨迹;评测开关打开时再追加 `llm_judge / attribution` 两类。手写 ReAct,**不依赖 LangChain/LangGraph 等框架**。
 
 ## 快速开始
 
@@ -16,79 +28,142 @@
 # 1. 安装依赖(uv 会自动准备 Python 3.11)
 uv sync
 
-# 2. τ-bench 已克隆在 ./data/tau-bench;如在别处,改 .env 的 TAU_BENCH_DATA_DIR
+# 2. τ-bench 已克隆在 ./data/tau-bench;若在别处,改 .env 的 TAU_BENCH_DATA_DIR
 
-# 3. 配环境变量:编辑项目根目录下的 .env(按文件内中文注释填写),
-#    至少把 UPSTREAM_API_KEY 改成真实的 DeepSeek key
+# 3. 配 .env(见下)与 models.json(多厂商时,见下)
+```
 
-# 4. 端到端冒烟:起代理 -> 跑 5 道 retail 题 -> 出指标表
+`.env`(项目根目录,已 gitignore):
+
+```bash
+# 上游默认厂商(models.json 里没命中的模型回退到这)
+UPSTREAM_BASE_URL=https://api.deepseek.com
+UPSTREAM_API_KEY=sk-你的key
+# 被测 Agent 与用户模拟器默认模型
+AGENT_MODEL=deepseek-chat
+USER_MODEL=deepseek-chat
+# Agent 如何访问本地代理(代理再注入真实上游 key;此 key 占位即可)
+OPENAI_BASE_URL=http://localhost:8080/v1
+OPENAI_API_KEY=proxy-placeholder
+# tau-bench 仓库根目录
+TAU_BENCH_DATA_DIR=./data/tau-bench
+```
+
+## 运行
+
+需要两个终端:终端 A 起代理(常驻),终端 B 跑评测。
+
+```bash
+# 终端 A:启动 OpenAI 兼容代理(转发到 .env / models.json 配置的上游)
+uv run python -m proxy.server --port 8080
+#   想无 key 离线联调:加 --mock(返回可计 token 的假响应)
+
+# 终端 B:单题
+uv run python -m runner.run --agent react --task tau_retail_000 --run-id r1
+uv run python -m runner.run --agent react --task math --run-id m1      # 不依赖 tau 的算术题
+
+# 终端 B:批量(可配 split 与题数)
+uv run python -m runner.run --agent react --split test --count 30 --run-id batch1
+uv run python -m runner.run --agent react --split train --start 20 --count 5
+uv run python -m runner.run --agent react --tasks tau_retail_003,tau_retail_050   # 指定若干题
+
+# 选模型(发给当前上游的模型名;按 models.json 路由)
+uv run python -m runner.run --agent react --model glm-4.6 --count 10 --run-id glm
+
+# 叠加 LLM 评测(可自由开关)
+uv run python -m runner.run --agent react --count 30 --llm-judge \
+    --attribution --attribution-mode failed_only --judge-model deepseek-chat
+
+# 离线聚合指标(跨任意轨迹通配)
+uv run python -m analysis.metrics --glob "trajectories/**/*.jsonl"
+
+# 一键端到端冒烟(起代理→跑 5 道 retail→出表)
 bash scripts/smoke.sh
 ```
 
-单独跑一道题:
+常用参数:
+- `--split` `test|train|dev`(默认 test);`--count N`(从 `--start` 起跑 N 道);`--tasks a,b,c`(指定题,覆盖 count)
+- `--model`(被测模型,默认 `.env` 的 `AGENT_MODEL`);`--run-id`(批次标签,不填随机)
+- `--llm-judge`(开启质量打分);`--attribution`(开启归因)+ `--attribution-mode` `failed_only`(默认)`| all | sample_N`;`--judge-model`(评测模型,默认复用 `--model`)
+- **每次运行都会在 `reports/<run_id>.md` 生成一份报告**
 
-```bash
-# 终端 A:起代理(转发到 .env 配置的上游)
-uv run python -m proxy.server --port 8080
-#   想无 key 离线联调,加 --mock(返回可计 token 的假响应)
+## 多模型 / 多厂商路由(models.json)
 
-# 终端 B:跑一组 (agent, task)
-uv run python -m runner.run --agent react --task tau_retail_000 --run-id r1
-uv run python -m runner.run --agent react --task math --run-id m1   # 不依赖 tau 的算术题
+并列预置各模型的 url+key,跑时 `--model` 一键切换,无需临时改配置。`models.json`(项目根目录,已 gitignore,含密钥):
 
-# 分析
-uv run python -m analysis.metrics --glob "trajectories/**/*.jsonl"
+```json
+{
+  "deepseek-chat":  {"base_url": "https://api.deepseek.com",                 "api_key": "sk-..."},
+  "glm-4.6":        {"base_url": "https://open.bigmodel.cn/api/paas/v4",     "api_key": "..."},
+  "qwen-plus":      {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "api_key": "sk-..."}
+}
 ```
+
+- **键名 = 你 `--model` 传的名字 = 发给该厂商的 `model` 字段**,必须填该厂商真实支持的型号名。
+- 代理按请求里的 `model` 查表路由;**没命中的模型回退到 `.env` 的 `UPSTREAM_*`**。
+- `models.json` 是**热读**的(每次请求读),增删模型无需重启代理;但**改了代理代码**需重启代理。
+- 仅支持 OpenAI 协议兼容的厂商即可零代码接入;不兼容的(如 Anthropic 原生)只需改 `proxy/server.py` 的 `_forward_upstream` 做格式转换。
 
 ## 目录结构
 
 ```
 agent-eval/
-├── proxy/            # OpenAI 兼容反向代理 + 轨迹录制基础设施
-│   ├── server.py     #   /v1/chat/completions 转发(支持 --mock),记录 llm_call
-│   └── recorder.py   #   Event 模型、路径、上下文、JSONL 追加、追踪客户端、.env 加载
-├── tools/            # 工具层
-│   ├── wrapper.py    #   @traced_tool:旁路记录 tool_call/tool_return
-│   ├── dummy_tools.py#   add/multiply,供 MathTask 与测试用
-│   └── tau_tools.py  #   把 τ-bench 工具包装成绑定数据库的可调用对象
+├── proxy/
+│   ├── server.py     # OpenAI 兼容代理:按 model 路由转发、记录 llm_call、--mock
+│   └── recorder.py   # Event 模型、路径、上下文、JSONL 追加、内容寻址 blob、追踪客户端、.env
+├── tools/
+│   ├── wrapper.py    # @traced_tool:旁路记录 tool_call/tool_return
+│   ├── dummy_tools.py# add/multiply(MathTask 用)
+│   └── tau_tools.py  # 把 τ-bench 工具包装成绑定数据库的可调用对象
 ├── agents/           # 每种 agent 类型一个文件夹
 │   ├── base.py       #   BaseAgent 抽象
 │   ├── echo_agent/   #   回显 agent(打通空闭环用)
 │   └── react_agent/  #   手写 ReAct 循环(OpenAI function calling)
-├── tasks/            # 任务层
-│   ├── base.py       #   Task 抽象(get_prompt/get_tools/judge + 可选 system_prompt)
-│   ├── echo_task.py  #   恒成功任务
-│   ├── math_task.py  #   (3+5)*2 算术题
-│   └── tau_bench.py  #   τ-bench 任务加载、用户模拟器、judge
-├── runner/run.py     # 主入口:解析 (agent, task),跑一次并判分、补 final_output
-├── analysis/metrics.py # 离线读 JSONL 算四项指标,聚合成 markdown 表
-└── trajectories/     # 运行产物:{agent_id}/{task_id}/{run_id}.jsonl(gitignore)
+├── tasks/
+│   ├── base.py       # Task 抽象(get_prompt/get_tools/judge + 可选 system_prompt/user_turn/goal_text/reference_summary)
+│   ├── echo_task.py / math_task.py / tau_bench.py
+├── evaluators/       # 每种评测器一个文件夹
+│   ├── base.py / transcript.py
+│   ├── llm_judge/    #   LLM-as-judge 质量打分
+│   └── attributor/   #   错误归因(偏离点定位)
+├── runner/run.py     # 单题/批量入口 + 判分 + 可选评测,产出报告
+├── analysis/metrics.py # 离线指标 + 红绿灯 markdown 报告
+├── models.json       # 多厂商路由(gitignore,含密钥)
+├── data/tau-bench/   # 第三方基准克隆(gitignore)
+├── trajectories/     # 轨迹 {agent}/{task}/{run}.jsonl + blobs/(gitignore)
+└── reports/          # 每次运行的报告 <run_id>.md(gitignore)
 ```
 
-## 核心契约
+## 轨迹格式与 blob 寻址
 
-轨迹是一行一个事件的 JSONL,字段见 `proxy/recorder.py` 的 `Event`:
+一行一个事件的 JSONL,字段见 `proxy/recorder.py` 的 `Event`:
 
 | event_type | data 主要字段 |
 | --- | --- |
-| `llm_call` | model, messages, response, prompt_tokens, completion_tokens, latency_ms, role |
+| `llm_call` | role, model, request(完整请求体), response(完整响应), prompt_tokens, completion_tokens, latency_ms |
 | `tool_call` | tool_name, args |
 | `tool_return` | tool_name, result, error, latency_ms |
 | `final_output` | output, success, error |
+| `llm_judge`(可选) | overall, dimensions, reason |
+| `attribution`(可选) | deviation_seq, error_category, confidence, recoverable, summary, root_cause_hypothesis, fix_suggestion |
 
-`success` 由 task 层判分填入,不是 Agent 自报。代理(LLM 调用)与 wrapper(工具调用)
-是两个写入方,靠"读取当前行数 → seq = 行数 → 追加"维持时序递增的 `seq`。
+- **内容寻址 blob**:超过阈值(默认 1KB,`BLOB_THRESHOLD_BYTES`)的大字段(system prompt、tools schema、长工具返回等)按 sha256 外置到 `trajectories/blobs/`,事件里只留 `{"$blob": "<hash>"}` 引用。相同内容只存一份——重复的 wiki / 历史消息全局去重;`recorder.rehydrate()` 可递归还原完整内容。
+- **seq**:单调递增整数(按写入行号分配),即使代理与 Agent 跨进程写同一文件也保序;`final_output.success` 由 task 层判分填入,不是 Agent 自报。
+- **向后兼容**:没有 `llm_judge/attribution` 事件、或没有 blob 引用的旧轨迹,分析端都能正常读(自动跳过/透传)。
+
+## 报告
+
+每次运行写 `reports/<run_id>.md`:顶部红绿灯总览(🟢🟡🔴)、每题 ✅/❌ + token 条 + 冗余灯、规则失败原因;开了评测则追加"LLM 评分"与"失败归因(第 N 步:……)"两段。目标是让不了解评测的人也能一眼看出好坏。
 
 ## 扩展点(新增文件,不改主干)
 
-**加一种新 Agent**:在 `agents/` 下建新文件夹(如 `agents/plan_solve/`),实现
-`BaseAgent.run(task, run_id)`,在 `agents/<name>/__init__.py` re-export 类,再到
-`runner/run.py` 的 `make_agent` 注册一行。轨迹会被代理/wrapper 自动记录。
+- **加一种 Agent**:`agents/` 下建文件夹实现 `BaseAgent.run`,在 `runner/run.py` 的 `make_agent` 注册一行。
+- **加一个数据集/任务**:写 `Task` 子类实现 `get_prompt/get_tools/judge`(格式与评分完全自定义);合成任务可填 `reference_path_length`(已知最优步数)用于后续 path_length_ratio 指标。
+- **加一种评测器**:`evaluators/` 下建文件夹实现 `Evaluator.evaluate`。
+- **加一个模型/厂商**:往 `models.json` 加一条;OpenAI 兼容则零代码。
 
-**加一个新任务/数据集**:写一个 `Task` 子类,实现 `get_prompt / get_tools / judge`
-(格式与评分**完全由你定义**,主干不感知),在 `runner/run.py` 的 `make_task` 注册。
-合成任务可填 `reference_path_length`(已知最优步数),供后续计算 path_length_ratio。
+## 备注
 
-**注**:`tau-bench` 顶层 `__init__` 会 `import litellm`(仅其内置用户模拟器用)。本项目
-用自写的、走代理的用户模拟器,从不触发该路径,故 `tools/tau_tools.py` 注入了 litellm
-桩,无需安装这一重依赖。
+- `tau-bench` 顶层 `__init__` 会 `import litellm`(仅其内置用户模拟器用)。本项目用自写的、走代理的用户模拟器,从不触发该路径,故 `tools/tau_tools.py` 注入 litellm 桩,无需安装这一重依赖。
+- 验证方式是**对真实 LLM 跑**(`runner.run` 跑真实题后看轨迹/报告),不使用 mock/fixture 单测。
+- 国内环境若开了全局/TUN 代理,可能导致代理→某些国内厂商(如 dashscope)的 TLS 被打断;此时给对应域名加直连规则,或换用可达的厂商端点。

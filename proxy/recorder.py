@@ -27,7 +27,10 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-EventType = Literal["llm_call", "tool_call", "tool_return", "final_output"]
+# 前 4 类是 Agent 自身的轨迹;后 2 类是可选的跑后评测结果(开关关闭时不会出现)
+EventType = Literal[
+    "llm_call", "tool_call", "tool_return", "final_output", "llm_judge", "attribution"
+]
 
 # 项目根目录:本文件位于 <root>/proxy/recorder.py
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

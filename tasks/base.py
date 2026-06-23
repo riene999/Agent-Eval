@@ -38,6 +38,21 @@ class Task(ABC):
         """
         return DEFAULT_SYSTEM_PROMPT
 
+    def goal_text(self) -> Optional[str]:
+        """无副作用地返回"用户的目标/指令",供评测器(LLM-judge/归因)使用。
+
+        与 get_prompt 不同:get_prompt 可能有副作用(如 tau 会驱动用户模拟器开场);
+        本方法只返回静态文本,默认 None。
+        """
+        return None
+
+    def reference_summary(self) -> Optional[str]:
+        """可选的"标准路径"文字摘要,供错误归因参考(gold path 接口)。
+
+        默认 None(无参考归因);需要时子类返回标准答案的步骤摘要。
+        """
+        return None
+
     def user_turn(self, message: str) -> Optional[str]:
         """对话式任务的"用户回合"钩子。
 

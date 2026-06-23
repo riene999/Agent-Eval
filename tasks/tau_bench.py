@@ -108,6 +108,10 @@ class TauBenchTask(Task):
         rules = "\n".join(f"- {r}" for r in RULES)
         return f"{WIKI}\n\n# 规则\n{rules}\n\n# 对话方式\n{_DIALOG_NOTE}"
 
+    def goal_text(self) -> str:
+        # 无副作用:直接返回该题的用户指令,供评测器使用(不驱动用户模拟器)
+        return self.tau_task.instruction
+
     def get_prompt(self) -> str:
         self._ensure_ready()
         assert self._user_sim is not None

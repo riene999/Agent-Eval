@@ -14,9 +14,12 @@ from __future__ import annotations
 import argparse
 import glob
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from proxy.recorder import Event
+
+# 这些 role 是评测装置(用户模拟器/打分/归因),其 token 不计入"被测 Agent"
+_HARNESS_ROLES = {"user_sim", "judge", "attributor"}
 
 
 def _load_file(path: str) -> List[Event]:
@@ -38,10 +41,12 @@ def compute_metrics(events: List[Event]) -> Dict[str, Any]:
     success = False
     total_tokens = 0
     call_keys: List[str] = []
+    llm_score: Optional[float] = None
+    attribution: Optional[Dict[str, Any]] = None
     for e in events:
         if e.event_type == "llm_call":
-            # 只统计被测 Agent 的 token,排除用户模拟器(role=user_sim)
-            if e.data.get("role") != "user_sim":
+            # 只统计被测 Agent 的 token,排除评测装置(用户模拟器/judge/归因)
+            if e.data.get("role") not in _HARNESS_ROLES:
                 total_tokens += int(e.data.get("prompt_tokens", 0) or 0)
                 total_tokens += int(e.data.get("completion_tokens", 0) or 0)
         elif e.event_type == "tool_call":
@@ -53,6 +58,10 @@ def compute_metrics(events: List[Event]) -> Dict[str, Any]:
             call_keys.append(key)
         elif e.event_type == "final_output":
             success = bool(e.data.get("success", False))
+        elif e.event_type == "llm_judge":  # 可选事件,旧轨迹没有则保持 None
+            llm_score = e.data.get("overall")
+        elif e.event_type == "attribution":
+            attribution = e.data
 
     tool_call_count = len(call_keys)
     distinct = len(set(call_keys))
@@ -67,6 +76,8 @@ def compute_metrics(events: List[Event]) -> Dict[str, Any]:
         "total_tokens": total_tokens,
         "tool_call_count": tool_call_count,
         "redundant_call_rate": redundant_call_rate,
+        "llm_score": llm_score,
+        "attribution": attribution,
     }
 
 
@@ -169,8 +180,30 @@ def build_report(meta: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
 
     fails = [(tid, v) for tid, v in meta.get("per_task", []) if not v.get("success")]
     if fails:
-        lines += ["## 失败的题(原因)", ""]
+        lines += ["## 失败的题(规则判分原因)", ""]
         lines += [f"- `{tid}`: {v.get('reason', '')}" for tid, v in fails]
+        lines.append("")
+
+    # 以下两段仅在开启了对应评测时出现(旧轨迹/未开启则自动跳过)
+    judged = [r for r in rows if r.get("llm_score") is not None]
+    if judged:
+        lines += ["## LLM 评分", "", "| 题 | LLM 总分 | 规则 |", "| --- | ---: | :---: |"]
+        for r in judged:
+            short = r["task_id"].replace("tau_retail_", "")
+            lines.append(f"| {short} | {r['llm_score']:.2f} | {'✅' if r['accuracy'] else '❌'} |")
+        lines.append("")
+
+    attributed = [r for r in rows if r.get("attribution")]
+    if attributed:
+        lines += ["## 失败归因(LLM)", ""]
+        for r in attributed:
+            a = r["attribution"]
+            lines.append(
+                f"- `{r['task_id']}` 第 {a.get('deviation_seq')} 步 "
+                f"[{a.get('error_category')}] 信心 {a.get('confidence')}:{a.get('summary')}"
+            )
+            if a.get("fix_suggestion"):
+                lines.append(f"    建议:{a['fix_suggestion']}")
         lines.append("")
 
     lines += [
