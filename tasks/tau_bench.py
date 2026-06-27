@@ -8,10 +8,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Callable, Dict, List, Optional
 
-from proxy.recorder import Event, make_client
+from proxy.recorder import Event, make_client, rehydrate
 from tasks.base import Task
 from tools.tau_tools import (
     RESPOND_ACTION_NAME,
@@ -156,7 +157,42 @@ class TauBenchTask(Task):
         reason = f"r_actions={r_actions} r_outputs={r_outputs}"
         if missing:
             reason += f" missing_outputs={missing}"
-        return {"success": success, "score": 1.0 if success else 0.0, "reason": reason}
+
+        # 3) 路径保真(对 gold,启发式,与上面的结果判分互补):
+        #    选工具准确率 = gold 工具被 Agent 调到的比例;参数正确率 = 选对工具者中参数也精确匹配的比例
+        gold = [a for a in self.tau_task.actions if a.name != RESPOND_ACTION_NAME]
+        agent_calls = [
+            (e.data.get("tool_name"), rehydrate(e.data.get("args")))
+            for e in trajectory
+            if e.event_type == "tool_call"
+        ]
+        agent_names = {name for name, _ in agent_calls}
+
+        def _key(d: Any) -> str:
+            try:
+                return json.dumps(d, sort_keys=True, ensure_ascii=False)
+            except (TypeError, ValueError):
+                return str(d)
+
+        tool_selection: Optional[float] = None
+        arg_correctness: Optional[float] = None
+        if gold:
+            hit_golds = [a for a in gold if a.name in agent_names]
+            tool_selection = len(hit_golds) / len(gold)
+            exact = sum(
+                1
+                for a in gold
+                if any(name == a.name and _key(args) == _key(a.kwargs) for name, args in agent_calls)
+            )
+            arg_correctness = (exact / len(hit_golds)) if hit_golds else 0.0
+
+        return {
+            "success": success,
+            "score": 1.0 if success else 0.0,
+            "reason": reason,
+            "tool_selection": tool_selection,
+            "arg_correctness": arg_correctness,
+        }
 
 
 def load_tau_task(task_id: str) -> TauBenchTask:

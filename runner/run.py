@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -125,6 +126,9 @@ def run_one(
                 "output": output,
                 "success": bool(verdict.get("success", False)),
                 "error": result.get("error"),
+                # 路径保真(对 gold);非 tau 任务为 None,分析端自动跳过
+                "tool_selection": verdict.get("tool_selection"),
+                "arg_correctness": verdict.get("arg_correctness"),
             },
         )
         if llm_judge:
@@ -244,7 +248,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         build_trials_report,
         compute_metrics,
         pass_at_k,
+        report_json,
         to_markdown,
+        trials_json,
     )
 
     report_path = PROJECT_ROOT / "reports" / f"{run_id}.md"
@@ -281,6 +287,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             "per_task": results,
         }
         report_path.write_text(build_report(meta, rows), encoding="utf-8")
+        report_path.with_suffix(".json").write_text(
+            json.dumps(report_json(meta, rows), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     else:
         # —— 多试验:按 task_id 归组,算 pass@k + 方差 ——
         per_task: Dict[str, list] = {}
@@ -305,9 +314,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             "temperature": args.temperature,
             "timestamp": datetime.now().isoformat(timespec="seconds"),
         }
-        report_path.write_text(build_trials_report(meta, list(per_task.items())), encoding="utf-8")
+        items = list(per_task.items())
+        report_path.write_text(build_trials_report(meta, items), encoding="utf-8")
+        report_path.with_suffix(".json").write_text(
+            json.dumps(trials_json(meta, items), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
-    print(f"\n报告已写入: {report_path}")
+    print(f"\n报告已写入: {report_path}(同名 .json 一并导出)")
 
 
 if __name__ == "__main__":
