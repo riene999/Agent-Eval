@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Dict, Optional, Sequence
 from uuid import uuid4
@@ -167,6 +168,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                         help="failed_only(默认) | all | sample_N")
     parser.add_argument("--judge-model", default=None,
                         help="评测/归因用模型;默认复用 --model / AGENT_MODEL")
+    parser.add_argument("--concurrency", type=int, default=1,
+                        help="并发题数(有界线程池);默认 1=串行")
     args = parser.parse_args(argv)
 
     task_ids = resolve_task_ids(args)
@@ -193,21 +196,32 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         else:
             raise SystemExit(f"未知 --attribution-mode: {m!r}")
 
-    results: list[tuple[str, Dict[str, Any]]] = []
-    for tid in task_ids:
+    def _worker(tid: str) -> tuple[str, Dict[str, Any]]:
         task = make_task(tid)
         # 同 run_id 重跑同题会把事件追加到旧文件,先清掉保证干净
         path = trajectory_path(agent.agent_id, task.task_id, run_id)
         if path.exists():
             path.unlink()
-        verdict = run_one(
-            agent, task, run_id,
-            llm_judge=args.llm_judge,
-            attribution_mode=attribution_mode,
-            in_sample=(tid in sampled),
-            judge_model=judge_model,
-        )
-        results.append((task.task_id, verdict))
+        try:
+            verdict = run_one(
+                agent, task, run_id,
+                llm_judge=args.llm_judge,
+                attribution_mode=attribution_mode,
+                in_sample=(tid in sampled),
+                judge_model=judge_model,
+            )
+        except Exception as e:  # 单题异常不拖垮整批
+            logger.warning("任务 %s 运行异常: %r", tid, e)
+            verdict = {"success": False, "score": 0.0, "reason": f"运行异常: {e!r}"}
+        return task.task_id, verdict
+
+    # 各题相互独立(各自数据库/用户模拟器、各写各的轨迹文件),可有界并发;
+    # 结果按输入顺序回填,报告/指标顺序稳定
+    results: list[tuple[str, Dict[str, Any]]] = [("", {})] * len(task_ids)
+    with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as pool:
+        futures = {pool.submit(_worker, tid): i for i, tid in enumerate(task_ids)}
+        for fut in as_completed(futures):
+            results[futures[fut]] = fut.result()
 
     from analysis.metrics import build_report, compute_metrics, to_markdown
 
