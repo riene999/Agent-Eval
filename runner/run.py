@@ -38,7 +38,11 @@ def make_agent(name: str, model: Optional[str] = None) -> BaseAgent:
         from agents.react_agent import ReactAgent
 
         return ReactAgent(model=model)
-    raise SystemExit(f"未知 agent: {name!r}(可选:echo, react)")
+    if name == "plan_solve":
+        from agents.plan_solve import PlanSolveAgent
+
+        return PlanSolveAgent(model=model)
+    raise SystemExit(f"未知 agent: {name!r}(可选:echo, react, plan_solve)")
 
 
 def make_task(task_id: str) -> Task:
