@@ -59,7 +59,16 @@ def make_task(task_id: str) -> Task:
         from tasks.tau_bench import load_tau_task
 
         return load_tau_task(task_id)
-    raise SystemExit(f"未知 task: {task_id!r}(可选:echo, math, tau_retail_XXX)")
+    if task_id.startswith("ekb_"):  # 自建数据集 data/enterprise_kb(自包含)
+        import sys
+
+        kb_root = str(PROJECT_ROOT / "data")
+        if kb_root not in sys.path:
+            sys.path.insert(0, kb_root)
+        from enterprise_kb.task import load_task
+
+        return load_task(task_id)
+    raise SystemExit(f"未知 task: {task_id!r}(可选:echo, math, tau_retail_XXX, ekb_XXX)")
 
 
 def _should_attribute(mode: Optional[str], in_sample: bool, success: bool) -> bool:
@@ -145,6 +154,13 @@ def resolve_task_ids(args: argparse.Namespace) -> list[str]:
     if args.task:
         return [args.task]
     if args.tasks:
+        if args.tasks.strip() == "all-ekb":  # 跑整个自建数据集 enterprise_kb
+            import sys
+
+            sys.path.insert(0, str(PROJECT_ROOT / "data"))
+            from enterprise_kb.task import _load_specs
+
+            return list(_load_specs().keys())
         return [t.strip() for t in args.tasks.split(",") if t.strip()]
     if args.count is not None:
         from tasks.tau_bench import tau_task_id

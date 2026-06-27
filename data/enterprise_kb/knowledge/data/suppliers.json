@@ -1,0 +1,5 @@
+{
+  "顺丰速运": {"category": "物流", "contact": "400-111-6666", "rating": "A", "since": "2020"},
+  "戴尔(中国)": {"category": "IT 硬件", "contact": "400-222-8888", "rating": "A", "since": "2018"},
+  "某云计算": {"category": "云服务", "contact": "400-333-9999", "rating": "B", "since": "2023"}
+}

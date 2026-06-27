@@ -1,0 +1,12 @@
+{
+  "E1001": {"name": "张伟", "dept": "研发", "level": "P6", "hire_date": "2021-03-01", "manager": "E1100", "email": "zhangwei@corp.com"},
+  "E1002": {"name": "李娜", "dept": "人力资源", "level": "P5", "hire_date": "2024-09-15", "manager": "E1101", "email": "lina@corp.com"},
+  "E1003": {"name": "王芳", "dept": "财务", "level": "P7", "hire_date": "2019-06-10", "manager": "E1102", "email": "wangfang@corp.com"},
+  "E1004": {"name": "刘洋", "dept": "销售", "level": "P4", "hire_date": "2025-12-01", "manager": "E1103", "email": "liuyang@corp.com"},
+  "E1005": {"name": "陈静", "dept": "研发", "level": "P8", "hire_date": "2016-02-20", "manager": "E1100", "email": "chenjing@corp.com"},
+  "E1006": {"name": "赵强", "dept": "销售", "level": "P5", "hire_date": "2022-07-01", "manager": "E1103", "email": "zhaoqiang@corp.com"},
+  "E1007": {"name": "孙丽", "dept": "研发", "level": "P6", "hire_date": "2020-11-15", "manager": "E1100", "email": "sunli@corp.com"},
+  "E1008": {"name": "周杰", "dept": "财务", "level": "P5", "hire_date": "2023-03-20", "manager": "E1102", "email": "zhoujie@corp.com"},
+  "E1009": {"name": "吴敏", "dept": "人力资源", "level": "P6", "hire_date": "2017-08-01", "manager": "E1101", "email": "wumin@corp.com"},
+  "E1010": {"name": "郑浩", "dept": "研发", "level": "P7", "hire_date": "2014-05-10", "manager": "E1100", "email": "zhenghao@corp.com"}
+}

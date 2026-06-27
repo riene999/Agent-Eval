@@ -1,0 +1,4 @@
+{
+  "TK-1001": {"status": "处理中", "type": "VPN 无法连接", "opened": "2026-06-20", "assignee": "IT 支持组"},
+  "TK-1002": {"status": "已解决", "type": "密码重置", "opened": "2026-06-18", "assignee": "IT 支持组"}
+}

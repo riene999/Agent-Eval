@@ -1,0 +1,6 @@
+{
+  "MR-301": {"location": "3 楼东区", "capacity": 12, "equipment": ["投影", "视频会议"]},
+  "MR-302": {"location": "3 楼东区", "capacity": 4, "equipment": ["白板"]},
+  "MR-201": {"location": "2 楼", "capacity": 6, "equipment": ["投影"]},
+  "MR-501": {"location": "5 楼", "capacity": 20, "equipment": ["投影", "视频会议", "音响"]}
+}

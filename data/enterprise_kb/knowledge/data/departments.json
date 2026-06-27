@@ -1,0 +1,6 @@
+{
+  "研发": {"head": "E1100", "headcount": 120, "location": "3 楼"},
+  "财务": {"head": "E1102", "headcount": 15, "location": "5 楼"},
+  "人力资源": {"head": "E1101", "headcount": 10, "location": "5 楼"},
+  "销售": {"head": "E1103", "headcount": 40, "location": "6 楼"}
+}

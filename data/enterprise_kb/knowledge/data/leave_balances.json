@@ -1,0 +1,12 @@
+{
+  "E1001": {"annual_total": 10, "annual_used": 3, "annual_remaining": 7, "sick_remaining": 5},
+  "E1002": {"annual_total": 10, "annual_used": 2, "annual_remaining": 8, "sick_remaining": 5},
+  "E1003": {"annual_total": 10, "annual_used": 8, "annual_remaining": 2, "sick_remaining": 4},
+  "E1004": {"annual_total": 0, "annual_used": 0, "annual_remaining": 0, "sick_remaining": 5},
+  "E1005": {"annual_total": 15, "annual_used": 2, "annual_remaining": 13, "sick_remaining": 5},
+  "E1006": {"annual_total": 10, "annual_used": 5, "annual_remaining": 5, "sick_remaining": 5},
+  "E1007": {"annual_total": 10, "annual_used": 1, "annual_remaining": 9, "sick_remaining": 3},
+  "E1008": {"annual_total": 10, "annual_used": 4, "annual_remaining": 6, "sick_remaining": 5},
+  "E1009": {"annual_total": 10, "annual_used": 0, "annual_remaining": 10, "sick_remaining": 5},
+  "E1010": {"annual_total": 15, "annual_used": 6, "annual_remaining": 9, "sick_remaining": 2}
+}

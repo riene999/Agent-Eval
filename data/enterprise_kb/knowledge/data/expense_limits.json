@@ -1,0 +1,7 @@
+{
+  "P4": {"meal": 100, "hotel": 400, "transport": 80},
+  "P5": {"meal": 120, "hotel": 500, "transport": 100},
+  "P6": {"meal": 150, "hotel": 600, "transport": 120},
+  "P7": {"meal": 200, "hotel": 800, "transport": 150},
+  "P8": {"meal": 250, "hotel": 1000, "transport": 200}
+}
