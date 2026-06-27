@@ -14,7 +14,9 @@ from __future__ import annotations
 import argparse
 import glob
 import json
-from typing import Any, Dict, List, Optional
+import math
+import statistics
+from typing import Any, Dict, List, Optional, Tuple
 
 from proxy.recorder import Event
 
@@ -212,6 +214,75 @@ def build_report(meta: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
         "- 准确率灯:🟢 ≥80% / 🟡 ≥50% / 🔴 <50%",
         "- token 条:越长越费;🟢🟡🔴 = 本批内相对(便宜/中等/偏贵),成本轴无绝对好坏",
         "- 冗余灯:🟢 ≤5% / 🟡 ≤20% / 🔴 >20%(相同参数重复调同一工具的占比)",
+    ]
+    return "\n".join(lines)
+
+
+def pass_at_k(n: int, c: int, k: int) -> float:
+    """n 次试验中 c 次成功,随机取 k 次至少一次成功的概率(Codex 无偏估计)。"""
+    k = min(k, n)
+    if c <= 0:
+        return 0.0
+    if n - c < k:
+        return 1.0
+    return 1.0 - math.comb(n - c, k) / math.comb(n, k)
+
+
+def build_trials_report(
+    meta: Dict[str, Any], per_task: List[Tuple[str, List[Dict[str, Any]]]]
+) -> str:
+    """渲染多试验报告:每题 pass@1 / pass@N + token/工具 均值±std,外加总览。"""
+    trials = meta.get("trials")
+    lines = [f"# 评测报告 {meta.get('run_id', '')}(多试验)", ""]
+    info = []
+    for label, key in [("agent", "agent_id"), ("模型", "model"), ("split", "split"),
+                       ("trials", "trials"), ("seed", "seed"),
+                       ("temperature", "temperature"), ("时间", "timestamp")]:
+        if meta.get(key) is not None:
+            info.append(f"{label}={meta[key]}")
+    if info:
+        lines += ["> " + " · ".join(str(x) for x in info), ""]
+
+    p1s: List[float] = []
+    pNs: List[float] = []
+    body: List[str] = []
+    for task_id, rows in per_task:
+        if not rows:
+            continue
+        n = len(rows)
+        c = sum(r["accuracy"] for r in rows)
+        p1, pN = pass_at_k(n, c, 1), pass_at_k(n, c, n)
+        p1s.append(p1)
+        pNs.append(pN)
+        toks = [r["total_tokens"] for r in rows]
+        tools = [r["tool_call_count"] for r in rows]
+        short = task_id.replace("tau_retail_", "")
+        body.append(
+            f"| {short} | {c}/{n} | {p1:.0%} | {pN:.0%} | "
+            f"{statistics.mean(toks) / 1000:.0f}k ± {statistics.pstdev(toks) / 1000:.1f}k | "
+            f"{statistics.mean(tools):.1f} ± {statistics.pstdev(tools):.1f} |"
+        )
+
+    lines += ["## 总览", ""]
+    if p1s:
+        lines += [
+            f"- 题数 {len(p1s)} × 每题 {trials} 次",
+            f"- 平均 pass@1 **{statistics.mean(p1s):.1%}** · "
+            f"平均 pass@{trials} **{statistics.mean(pNs):.1%}**",
+        ]
+    else:
+        lines.append("- (无数据)")
+    lines += [
+        "",
+        "## 每题(多次试验)",
+        "",
+        "| 题 | 成功 | pass@1 | pass@N | token 均值±std | 工具 均值±std |",
+        "| --- | :---: | ---: | ---: | ---: | ---: |",
+        *body,
+        "",
+        "## 说明",
+        "- pass@1 = 平均成功率;pass@N = N 次中至少成功一次;std = 跨试验标准差(稳定性)。",
+        "- temperature=0 时多样性低、pass@k 可能退化;测稳定性建议 temperature>0。",
     ]
     return "\n".join(lines)
 

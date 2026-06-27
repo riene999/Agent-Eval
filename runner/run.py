@@ -29,19 +29,19 @@ from tasks.base import Task
 logger = logging.getLogger(__name__)
 
 
-def make_agent(name: str, model: Optional[str] = None) -> BaseAgent:
+def make_agent(name: str, model: Optional[str] = None, temperature: float = 0.0) -> BaseAgent:
     if name == "echo":
         from agents.echo_agent import EchoAgent
 
-        return EchoAgent()  # echo 不调模型,忽略 model
+        return EchoAgent()  # echo 不调模型,忽略 model/temperature
     if name == "react":
         from agents.react_agent import ReactAgent
 
-        return ReactAgent(model=model)
+        return ReactAgent(model=model, temperature=temperature)
     if name == "plan_solve":
         from agents.plan_solve import PlanSolveAgent
 
-        return PlanSolveAgent(model=model)
+        return PlanSolveAgent(model=model, temperature=temperature)
     raise SystemExit(f"未知 agent: {name!r}(可选:echo, react, plan_solve)")
 
 
@@ -107,10 +107,11 @@ def run_one(
     attribution_mode: Optional[str] = None,
     in_sample: bool = False,
     judge_model: Optional[str] = None,
+    seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     """执行一次 (agent, task),判分,并按需跑可选的 LLM 评测/归因。"""
     logger.info("开始运行 agent=%s task=%s run_id=%s", agent.agent_id, task.task_id, run_id)
-    with run_context(run_id, agent.agent_id, task.task_id):
+    with run_context(run_id, agent.agent_id, task.task_id, seed=seed):
         result = agent.run(task, run_id)
         output = str(result.get("output", ""))
         events = read_events(agent.agent_id, task.task_id, run_id)
@@ -173,12 +174,19 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     parser.add_argument("--judge-model", default=None,
                         help="评测/归因用模型;默认复用 --model / AGENT_MODEL")
     parser.add_argument("--concurrency", type=int, default=1,
-                        help="并发题数(有界线程池);默认 1=串行")
+                        help="并发数(有界线程池,跨 题×试验);默认 1=串行")
+    parser.add_argument("--trials", type=int, default=1,
+                        help="每题跑几次(>1 出 pass@k 与方差);默认 1")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="基准随机种子,第 t 次试验用 seed+t(注入 LLM 请求,可复现)")
+    parser.add_argument("--temperature", type=float, default=0.0,
+                        help="采样温度;测多试验多样性建议 >0")
     args = parser.parse_args(argv)
 
     task_ids = resolve_task_ids(args)
-    agent = make_agent(args.agent, args.model)
+    agent = make_agent(args.agent, args.model, args.temperature)
     run_id = args.run_id or uuid4().hex[:12]
+    trials = max(1, args.trials)
 
     # 归因策略:failed_only / all / sample_N(随机抽 N 道做归因)
     judge_model = args.judge_model or args.model
@@ -200,67 +208,105 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         else:
             raise SystemExit(f"未知 --attribution-mode: {m!r}")
 
-    def _worker(tid: str) -> tuple[str, Dict[str, Any]]:
+    def _worker(tid: str, trial: int) -> tuple[str, str, Dict[str, Any]]:
+        # 多试验:每次试验单独 run_id 与 seed,各写各的轨迹文件
+        trial_run_id = run_id if trials == 1 else f"{run_id}_t{trial}"
+        seed = None if args.seed is None else args.seed + trial
         task = make_task(tid)
-        # 同 run_id 重跑同题会把事件追加到旧文件,先清掉保证干净
-        path = trajectory_path(agent.agent_id, task.task_id, run_id)
+        path = trajectory_path(agent.agent_id, task.task_id, trial_run_id)
         if path.exists():
             path.unlink()
         try:
             verdict = run_one(
-                agent, task, run_id,
+                agent, task, trial_run_id,
                 llm_judge=args.llm_judge,
                 attribution_mode=attribution_mode,
                 in_sample=(tid in sampled),
                 judge_model=judge_model,
+                seed=seed,
             )
-        except Exception as e:  # 单题异常不拖垮整批
-            logger.warning("任务 %s 运行异常: %r", tid, e)
+        except Exception as e:  # 单个试验异常不拖垮整批
+            logger.warning("任务 %s 第 %d 次异常: %r", tid, trial, e)
             verdict = {"success": False, "score": 0.0, "reason": f"运行异常: {e!r}"}
-        return task.task_id, verdict
+        return task.task_id, trial_run_id, verdict
 
-    # 各题相互独立(各自数据库/用户模拟器、各写各的轨迹文件),可有界并发;
-    # 结果按输入顺序回填,报告/指标顺序稳定
-    results: list[tuple[str, Dict[str, Any]]] = [("", {})] * len(task_ids)
+    # 工作单元 = 题 × 试验;各单元独立(各自数据库/轨迹文件,记录层按线程隔离、
+    # blob 原子写,天然并发安全),有界并发;结果按提交顺序回填
+    units = [(tid, t) for tid in task_ids for t in range(trials)]
+    raw: list = [None] * len(units)
     with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as pool:
-        futures = {pool.submit(_worker, tid): i for i, tid in enumerate(task_ids)}
+        futures = {pool.submit(_worker, tid, t): i for i, (tid, t) in enumerate(units)}
         for fut in as_completed(futures):
-            results[futures[fut]] = fut.result()
+            raw[futures[fut]] = fut.result()
 
-    from analysis.metrics import build_report, compute_metrics, to_markdown
+    from analysis.metrics import (
+        build_report,
+        build_trials_report,
+        compute_metrics,
+        pass_at_k,
+        to_markdown,
+    )
 
-    rows = []
-    for tid, _ in results:
-        events = read_events(agent.agent_id, tid, run_id)
-        if events:
-            rows.append(compute_metrics(events))
-
-    if len(results) == 1:
-        tid, verdict = results[0]
-        print(
-            f"[done] agent={agent.agent_id} task={tid} run_id={run_id} "
-            f"success={verdict.get('success')} score={verdict.get('score')} "
-            f"reason={verdict.get('reason')!r}\n  轨迹: {trajectory_path(agent.agent_id, tid, run_id)}"
-        )
-    else:
-        print(f"\n[批量完成] agent={agent.agent_id} run_id={run_id} 共 {len(results)} 题:")
-        for tid, verdict in results:
-            print(f"  [{tid}] success={verdict.get('success')} reason={verdict.get('reason')!r}")
-        print("\n" + to_markdown(rows))
-
-    # 写报告文件:本批共享 run_id,故 reports/<run_id>.md 恰好对应"这一次"的题目
-    meta = {
-        "run_id": run_id,
-        "agent_id": agent.agent_id,
-        "model": getattr(agent, "model", None),
-        "split": args.split if args.count is not None else None,
-        "count": len(results),
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "per_task": results,
-    }
     report_path = PROJECT_ROOT / "reports" / f"{run_id}.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(build_report(meta, rows), encoding="utf-8")
+
+    if trials == 1:
+        # —— 单次:维持原有行为 ——
+        results = [(task_id, verdict) for (task_id, _rid, verdict) in raw]
+        rows = []
+        for task_id, trial_run_id, _v in raw:
+            events = read_events(agent.agent_id, task_id, trial_run_id)
+            if events:
+                rows.append(compute_metrics(events))
+        if len(results) == 1:
+            task_id, verdict = results[0]
+            print(
+                f"[done] agent={agent.agent_id} task={task_id} run_id={run_id} "
+                f"success={verdict.get('success')} score={verdict.get('score')} "
+                f"reason={verdict.get('reason')!r}\n  轨迹: "
+                f"{trajectory_path(agent.agent_id, task_id, run_id)}"
+            )
+        else:
+            print(f"\n[批量完成] agent={agent.agent_id} run_id={run_id} 共 {len(results)} 题:")
+            for task_id, verdict in results:
+                print(f"  [{task_id}] success={verdict.get('success')} reason={verdict.get('reason')!r}")
+            print("\n" + to_markdown(rows))
+        meta = {
+            "run_id": run_id,
+            "agent_id": agent.agent_id,
+            "model": getattr(agent, "model", None),
+            "split": args.split if args.count is not None else None,
+            "count": len(results),
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "per_task": results,
+        }
+        report_path.write_text(build_report(meta, rows), encoding="utf-8")
+    else:
+        # —— 多试验:按 task_id 归组,算 pass@k + 方差 ——
+        per_task: Dict[str, list] = {}
+        for task_id, trial_run_id, _v in raw:
+            events = read_events(agent.agent_id, task_id, trial_run_id)
+            if events:
+                per_task.setdefault(task_id, []).append(compute_metrics(events))
+        p1s = [pass_at_k(len(rs), sum(r["accuracy"] for r in rs), 1) for rs in per_task.values()]
+        pNs = [pass_at_k(len(rs), sum(r["accuracy"] for r in rs), len(rs)) for rs in per_task.values()]
+        print(f"\n[多试验完成] agent={agent.agent_id} run_id={run_id} {len(per_task)} 题 × {trials} 次")
+        if p1s:
+            import statistics
+
+            print(f"  平均 pass@1={statistics.mean(p1s):.1%}  平均 pass@{trials}={statistics.mean(pNs):.1%}")
+        meta = {
+            "run_id": run_id,
+            "agent_id": agent.agent_id,
+            "model": getattr(agent, "model", None),
+            "split": args.split if args.count is not None else None,
+            "trials": trials,
+            "seed": args.seed,
+            "temperature": args.temperature,
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        }
+        report_path.write_text(build_trials_report(meta, list(per_task.items())), encoding="utf-8")
+
     print(f"\n报告已写入: {report_path}")
 
 

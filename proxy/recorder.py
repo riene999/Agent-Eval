@@ -63,6 +63,7 @@ class RunContext:
     run_id: str
     agent_id: str
     task_id: str
+    seed: Optional[int] = None
 
 
 import contextvars
@@ -73,9 +74,11 @@ _ctx: "contextvars.ContextVar[Optional[RunContext]]" = contextvars.ContextVar(
 
 
 @contextmanager
-def run_context(run_id: str, agent_id: str, task_id: str) -> Iterator[RunContext]:
+def run_context(
+    run_id: str, agent_id: str, task_id: str, seed: Optional[int] = None
+) -> Iterator[RunContext]:
     """在 with 块内设置当前运行上下文,退出时自动还原。"""
-    ctx = RunContext(run_id=run_id, agent_id=agent_id, task_id=task_id)
+    ctx = RunContext(run_id=run_id, agent_id=agent_id, task_id=task_id, seed=seed)
     token = _ctx.set(ctx)
     try:
         yield ctx
@@ -286,6 +289,8 @@ def make_client(role: str = "agent"):
         "X-Task-Id": ctx.task_id,
         "X-Llm-Role": role,
     }
+    if ctx.seed is not None:
+        headers["X-Seed"] = str(ctx.seed)
     base_url = os.getenv("OPENAI_BASE_URL", "http://localhost:8080/v1")
     api_key = os.getenv("OPENAI_API_KEY", "proxy-placeholder")
     # trust_env=False:agent→本地代理这一跳必须直连 localhost,绕开系统/VPN 代理

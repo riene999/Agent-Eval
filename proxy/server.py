@@ -163,6 +163,12 @@ def create_app(mock: bool = False) -> FastAPI:
         request: Request, payload: Dict[str, Any] = Body(...)
     ) -> JSONResponse:
         trace = _trace_headers(request)
+        seed = request.headers.get("X-Seed")
+        if seed is not None:  # 由运行上下文注入,用于可复现/多试验
+            try:
+                payload["seed"] = int(seed)
+            except ValueError:
+                pass
         start = time.perf_counter()
         if app.state.mock:
             status, body = 200, _mock_completion(payload)
