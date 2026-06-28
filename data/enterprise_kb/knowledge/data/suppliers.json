@@ -1,5 +1,10 @@
 {
   "顺丰速运": {"category": "物流", "contact": "400-111-6666", "rating": "A", "since": "2020"},
   "戴尔(中国)": {"category": "IT 硬件", "contact": "400-222-8888", "rating": "A", "since": "2018"},
-  "某云计算": {"category": "云服务", "contact": "400-333-9999", "rating": "B", "since": "2023"}
+  "某云计算": {"category": "云服务", "contact": "400-333-9999", "rating": "B", "since": "2023"},
+  "京东企业购": {"category": "办公用品", "contact": "400-444-1010", "rating": "A", "since": "2019"},
+  "华为云": {"category": "云服务", "contact": "400-555-8080", "rating": "A", "since": "2021"},
+  "启明咨询": {"category": "咨询服务", "contact": "010-6666-1200", "rating": "B", "since": "2024"},
+  "优印图文": {"category": "印刷服务", "contact": "021-7777-2300", "rating": "C", "since": "2022"},
+  "安迅物流": {"category": "物流", "contact": "020-8888-3400", "rating": "B", "since": "2025"}
 }

@@ -295,9 +295,14 @@ def make_client(role: str = "agent"):
     api_key = os.getenv("OPENAI_API_KEY", "proxy-placeholder")
     # trust_env=False:agent→本地代理这一跳必须直连 localhost,绕开系统/VPN 代理
     # (HTTP_PROXY/HTTPS_PROXY),否则发往 127.0.0.1 的请求会被科学上网代理拦截转发而 502。
-    http_client = httpx.Client(trust_env=False, timeout=120.0)
+    # connect=5s:代理没起时立刻失败,不要傻等;读超时仍给足上游推理时间。
+    timeout = httpx.Timeout(float(os.getenv("AGENT_READ_TIMEOUT", "120")), connect=5.0)
+    http_client = httpx.Client(trust_env=False, timeout=timeout)
+    # max_retries=0:本地这一跳要么通要么不通,重试只会让"代理断了"churn 个没完(满屏
+    # Retrying request);需要时用 AGENT_MAX_RETRIES 调。
     return OpenAI(
-        base_url=base_url, api_key=api_key, default_headers=headers, http_client=http_client
+        base_url=base_url, api_key=api_key, default_headers=headers, http_client=http_client,
+        max_retries=int(os.getenv("AGENT_MAX_RETRIES", "0")),
     )
 
 

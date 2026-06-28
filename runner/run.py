@@ -11,7 +11,8 @@ import argparse
 import json
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime
 from typing import Any, Dict, Optional, Sequence
 from uuid import uuid4
@@ -169,6 +170,30 @@ def resolve_task_ids(args: argparse.Namespace) -> list[str]:
     raise SystemExit("请指定 --task <id> / --tasks a,b,c / --count N 三者之一")
 
 
+def _preflight_proxy(timeout: float = 3.0) -> None:
+    """开跑前探一下代理 /health;连不上就立刻退出,别让整批题对着死代理 churn。"""
+    import urllib.error
+    import urllib.request
+
+    base = os.getenv("OPENAI_BASE_URL", "http://localhost:8080/v1").rstrip("/")
+    # 去掉末尾的 /v1 再接 /health(代理的 /health 在根路径,不在 /v1 下)
+    root = base[:-3] if base.endswith("/v1") else base
+    health = root.rstrip("/") + "/health"
+    # 探活这一跳同样要绕开系统/VPN 代理(直连 localhost)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(health, timeout=timeout) as r:
+            if r.status == 200:
+                return
+        raise SystemExit(f"代理 {health} 返回异常状态,无法开跑。")
+    except (urllib.error.URLError, OSError, ConnectionError) as e:
+        raise SystemExit(
+            f"连不上代理({health}):{e}\n"
+            f"请先在另一个终端启动代理:  uv run python -m proxy.server\n"
+            f"(确认 models.json 已配好对应模型的上游与 key)"
+        )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     load_env()
     logging.basicConfig(
@@ -203,6 +228,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                         help="采样温度;测多试验多样性建议 >0")
     args = parser.parse_args(argv)
 
+    _preflight_proxy()  # 代理没起就别开跑,免得对着死代理 churn 一整批
     task_ids = resolve_task_ids(args)
     agent = make_agent(args.agent, args.model, args.temperature)
     run_id = args.run_id or uuid4().hex[:12]
@@ -228,9 +254,20 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         else:
             raise SystemExit(f"未知 --attribution-mode: {m!r}")
 
+    # 熔断:跑到一半代理挂了/连不上时,连续多次连接错误就中止整批,别 churn 完剩下的题
+    _abort = threading.Event()
+    _conn_fails = [0]
+    _fail_lock = threading.Lock()
+    _CONN_FAIL_LIMIT = int(os.getenv("CONN_FAIL_LIMIT", "5"))
+
+    def _is_conn_error(e: Exception) -> bool:
+        return "Connection" in type(e).__name__ or "APIConnectionError" in repr(e)
+
     def _worker(tid: str, trial: int) -> tuple[str, str, Dict[str, Any]]:
         # 多试验:每次试验单独 run_id 与 seed,各写各的轨迹文件
         trial_run_id = run_id if trials == 1 else f"{run_id}_t{trial}"
+        if _abort.is_set():  # 已熔断:后面的题直接跳过,不再发请求
+            return tid, trial_run_id, {"success": False, "score": 0.0, "reason": "批量已中止(代理不可达)"}
         seed = None if args.seed is None else args.seed + trial
         task = make_task(tid)
         path = trajectory_path(agent.agent_id, task.task_id, trial_run_id)
@@ -247,6 +284,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             )
         except Exception as e:  # 单个试验异常不拖垮整批
             logger.warning("任务 %s 第 %d 次异常: %r", tid, trial, e)
+            if _is_conn_error(e):
+                with _fail_lock:
+                    _conn_fails[0] += 1
+                    if _conn_fails[0] >= _CONN_FAIL_LIMIT and not _abort.is_set():
+                        _abort.set()
+                        logger.error("连续 %d 次连不上代理,已中止本批(请检查 proxy.server 是否在跑)。",
+                                     _conn_fails[0])
             verdict = {"success": False, "score": 0.0, "reason": f"运行异常: {e!r}"}
         return task.task_id, trial_run_id, verdict
 
@@ -254,10 +298,22 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     # blob 原子写,天然并发安全),有界并发;结果按提交顺序回填
     units = [(tid, t) for tid in task_ids for t in range(trials)]
     raw: list = [None] * len(units)
-    with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as pool:
-        futures = {pool.submit(_worker, tid, t): i for i, (tid, t) in enumerate(units)}
-        for fut in as_completed(futures):
-            raw[futures[fut]] = fut.result()
+    pool = ThreadPoolExecutor(max_workers=max(1, args.concurrency))
+    futures = {pool.submit(_worker, tid, t): i for i, (tid, t) in enumerate(units)}
+    try:
+        # 带超时的轮询等待:主线程每 0.3s 醒一次,Ctrl+C 才能被及时接住
+        # (阻塞在 as_completed 时,在飞请求要等到 read timeout 才返回,中断会被拖住)。
+        pending = set(futures)
+        while pending:
+            done, pending = wait(pending, timeout=0.3, return_when=FIRST_COMPLETED)
+            for fut in done:
+                raw[futures[fut]] = fut.result()
+    except KeyboardInterrupt:
+        # 在飞的 HTTP 请求最长要等 read timeout 才结束,普通退出会被 atexit 强制 join 线程
+        # 而卡住;直接 os._exit 硬退出,跳过线程 join,保证一按 Ctrl+C 立刻死。
+        logger.warning("收到中断,强制退出。")
+        os._exit(130)
+    pool.shutdown(wait=False, cancel_futures=True)
 
     from analysis.metrics import (
         build_report,

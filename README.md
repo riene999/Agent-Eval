@@ -127,7 +127,11 @@ agent-eval/
 │   ├── llm_judge/    #   LLM-as-judge 质量打分
 │   └── attributor/   #   错误归因(偏离点定位)
 ├── runner/run.py     # 单题/批量入口 + 判分 + 可选评测,产出报告
-├── analysis/metrics.py # 离线指标 + 红绿灯 markdown 报告
+├── analysis/
+│   ├── metrics.py    # 离线指标 + 红绿灯 markdown 报告
+│   ├── pareto.py     # 三轴 ASCII 帕累托前沿
+│   └── export.py     # 评测产物 → 后训练数据(SFT / DPO)
+├── data/enterprise_kb/ # 自建企业知识问答数据集(工具+文档+gold,git 跟踪)
 ├── models.json       # 多厂商路由(gitignore,含密钥)
 ├── data/tau-bench/   # 第三方基准克隆(gitignore)
 ├── trajectories/     # 轨迹 {agent}/{task}/{run}.jsonl + blobs/(gitignore)
@@ -154,6 +158,35 @@ agent-eval/
 ## 报告
 
 每次运行写 `reports/<run_id>.md`:顶部红绿灯总览(🟢🟡🔴)、每题 ✅/❌ + token 条 + 冗余灯、规则失败原因;开了评测则追加"LLM 评分"与"失败归因(第 N 步:……)"两段。目标是让不了解评测的人也能一眼看出好坏。
+
+## 导出后训练数据(SFT / DPO)
+
+`analysis/export.py` 把评测产物转成后训练数据,喂给训练框架(LLaMA-Factory / TRL / verl 等)。输出默认落 `data/train/`(已 gitignore)。
+
+| | SFT | DPO |
+| --- | --- | --- |
+| 教什么 | 照着「正确示范」学工具调用 | 同一题:好答案 vs 坏答案,学会偏好前者 |
+| 原料 | **只要数据集 gold**(无需跑模型) | **gold(chosen) + 模型实际失败轨迹(rejected)**,须先跑评测 |
+| 产物 | `sft.jsonl`(每行 `{messages:[...]}`)+ `tools.json`(工具定义) | `dpo.jsonl`(每行 `{prompt, chosen, rejected, task_id, success, run_id}`) |
+
+```bash
+# SFT:从 gold 渲染多轮 function-calling,不依赖任何评测run
+uv run python -m analysis.export sft --out data/train/sft.jsonl
+
+# DPO:从某次评测的失败题导出偏好对(chosen=gold,rejected=模型实跑)
+uv run python -m analysis.export dpo --run-id ekb_qw8b_react --out data/train/dpo.jsonl
+
+# 多实验一并导入(空格分隔)
+uv run python -m analysis.export dpo --run-id exp1 exp2 --out data/train/dpo.jsonl
+# 后续新实验增量并入(自动按 (题目,rejected) 去重)
+uv run python -m analysis.export dpo --run-id exp3 --append --out data/train/dpo.jsonl
+```
+
+DPO 选项:`--agent`(默认 `react_agent_v1`)、`--mode failed_only`(默认,只挑失败题)`| all`(连"做对但绕路"的也收,教简洁)、`--append`(追加去重)。
+
+> 注意:DPO 按 `--run-id` **精确匹配** `<run_id>.jsonl` 与多试验的 `<run_id>_t*.jsonl`,不会前缀误吸其它实验(如 `ekb_ds_100_react` 不会把 `ekb_ds_100_react_qw` 卷进来)。
+>
+> 工具不写进 system prompt 文字、而是靠 `tools` 字段传——这是 function-calling 规范。训练时需用框架的 chat template 把 `tools.json` 与每条样本绑定(LLaMA-Factory 的 `tools` 字段 / TRL 的 `apply_chat_template(..., tools=...)`)。
 
 ## 扩展点(新增文件,不改主干)
 

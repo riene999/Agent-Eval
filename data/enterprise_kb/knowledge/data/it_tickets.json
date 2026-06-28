@@ -1,4 +1,12 @@
 {
   "TK-1001": {"status": "处理中", "type": "VPN 无法连接", "opened": "2026-06-20", "assignee": "IT 支持组"},
-  "TK-1002": {"status": "已解决", "type": "密码重置", "opened": "2026-06-18", "assignee": "IT 支持组"}
+  "TK-1002": {"status": "已解决", "type": "密码重置", "opened": "2026-06-18", "assignee": "IT 支持组"},
+  "TK-1003": {"status": "待处理", "type": "软件安装申请", "opened": "2026-06-21", "assignee": "桌面支持组"},
+  "TK-1004": {"status": "处理中", "type": "显示器闪屏", "opened": "2026-06-22", "assignee": "桌面支持组"},
+  "TK-1005": {"status": "等待用户反馈", "type": "邮箱同步异常", "opened": "2026-06-23", "assignee": "应用支持组"},
+  "TK-1006": {"status": "已解决", "type": "办公网络掉线", "opened": "2026-06-19", "assignee": "网络组"},
+  "TK-1007": {"status": "处理中", "type": "VPN 无法连接", "opened": "2026-06-24", "assignee": "网络组"},
+  "TK-1008": {"status": "已关闭", "type": "笔记本电池故障", "opened": "2026-06-12", "assignee": "桌面支持组"},
+  "TK-1009": {"status": "待处理", "type": "账号权限申请", "opened": "2026-06-25", "assignee": "应用支持组"},
+  "TK-1010": {"status": "等待备件", "type": "键盘损坏", "opened": "2026-06-26", "assignee": "桌面支持组"}
 }

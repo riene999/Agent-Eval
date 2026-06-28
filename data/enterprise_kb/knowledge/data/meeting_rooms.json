@@ -2,5 +2,9 @@
   "MR-301": {"location": "3 楼东区", "capacity": 12, "equipment": ["投影", "视频会议"]},
   "MR-302": {"location": "3 楼东区", "capacity": 4, "equipment": ["白板"]},
   "MR-201": {"location": "2 楼", "capacity": 6, "equipment": ["投影"]},
-  "MR-501": {"location": "5 楼", "capacity": 20, "equipment": ["投影", "视频会议", "音响"]}
+  "MR-501": {"location": "5 楼", "capacity": 20, "equipment": ["投影", "视频会议", "音响"]},
+  "MR-401": {"location": "4 楼西区", "capacity": 8, "equipment": ["电视屏", "白板"]},
+  "MR-402": {"location": "4 楼西区", "capacity": 6, "equipment": ["投影", "白板"]},
+  "MR-601": {"location": "6 楼", "capacity": 10, "equipment": ["电视屏", "视频会议"]},
+  "MR-602": {"location": "6 楼", "capacity": 4, "equipment": ["白板"]}
 }

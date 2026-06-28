@@ -3,5 +3,19 @@
   "E1003": {"laptop": "ThinkPad X1 Carbon (2023)", "monitor": "Dell U2419H", "phone": "iPhone 15"},
   "E1005": {"laptop": "MacBook Pro 16 (2025)", "monitor": "LG 27UP850", "phone": null},
   "E1007": {"laptop": "MacBook Pro 14 (2023)", "monitor": "Dell U2419H", "phone": null},
-  "E1010": {"laptop": "ThinkPad X1 Carbon (2024)", "monitor": "LG 27UP850", "phone": "iPhone 14"}
+  "E1010": {"laptop": "ThinkPad X1 Carbon (2024)", "monitor": "LG 27UP850", "phone": "iPhone 14"},
+  "E1011": {"laptop": "Dell Latitude 7440", "monitor": "Dell U2723QE", "phone": null},
+  "E1012": {"laptop": "ThinkPad T14 Gen 5", "monitor": "Dell U2419H", "phone": "iPhone 15"},
+  "E1013": {"laptop": "ThinkPad X1 Carbon (2024)", "monitor": "LG 27UP850", "phone": null},
+  "E1014": {"laptop": "Dell Latitude 5450", "monitor": "Dell P2422H", "phone": null},
+  "E1015": {"laptop": "MacBook Pro 16 (2024)", "monitor": "Apple Studio Display", "phone": "iPhone 15 Pro"},
+  "E1016": {"laptop": "MacBook Air 15 (2024)", "monitor": "Dell U2723QE", "phone": "iPhone 14"},
+  "E1018": {"laptop": "ThinkPad T14 Gen 4", "monitor": "Dell P2422H", "phone": null},
+  "E1019": {"laptop": "Dell Latitude 7440", "monitor": "Dell U2419H", "phone": null},
+  "E1020": {"laptop": "ThinkPad X1 Carbon (2023)", "monitor": "LG 27UP850", "phone": null},
+  "E1021": {"laptop": "ThinkPad T14 Gen 5", "monitor": "Dell U2419H", "phone": null},
+  "E1022": {"laptop": "MacBook Air 13 (2024)", "monitor": "Dell P2422H", "phone": "iPhone 14"},
+  "E1024": {"laptop": "Dell Latitude 7440", "monitor": "Dell U2419H", "phone": null},
+  "E1026": {"laptop": "MacBook Pro 14 (2024)", "monitor": "LG 27UP850", "phone": "iPhone 15"},
+  "E1028": {"laptop": "ThinkPad X1 Carbon (2024)", "monitor": "Apple Studio Display", "phone": null}
 }

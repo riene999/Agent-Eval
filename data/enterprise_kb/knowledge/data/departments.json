@@ -2,5 +2,9 @@
   "研发": {"head": "E1100", "headcount": 120, "location": "3 楼"},
   "财务": {"head": "E1102", "headcount": 15, "location": "5 楼"},
   "人力资源": {"head": "E1101", "headcount": 10, "location": "5 楼"},
-  "销售": {"head": "E1103", "headcount": 40, "location": "6 楼"}
+  "销售": {"head": "E1103", "headcount": 40, "location": "6 楼"},
+  "市场": {"head": "E1104", "headcount": 22, "location": "6 楼"},
+  "法务": {"head": "E1105", "headcount": 8, "location": "5 楼"},
+  "采购": {"head": "E1106", "headcount": 12, "location": "4 楼"},
+  "行政": {"head": "E1107", "headcount": 9, "location": "2 楼"}
 }
