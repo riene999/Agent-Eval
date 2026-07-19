@@ -87,6 +87,23 @@ bash scripts/smoke.sh
 - `--llm-judge`(开启质量打分);`--attribution`(开启归因)+ `--attribution-mode` `failed_only`(默认)`| all | sample_N`;`--judge-model`(评测模型,默认复用 `--model`)
 - **每次运行都会在 `reports/<run_id>.md` 生成一份报告**
 
+## 可视化控制台
+
+如果不想反复手写长命令，可以用本地控制台统一查看数据集、模型配置、历史报告和完整轨迹，也可以把现有 runner 参数通过表单提交。控制台不会读取或展示模型密钥，也不改变 Agent、判分和指标计算逻辑。
+
+```bash
+# 终端 A：模型代理
+uv run python -m proxy.server --port 8080
+
+# 终端 B：可视化控制台
+uv run python -m ui.server --port 8090
+
+# 浏览器打开
+http://127.0.0.1:8090
+```
+
+控制台当前包含：评测总览、数据集、模型配置、发起评测、任务日志、评测报告和轨迹详情。后台评测任务的临时日志写入 `reports/.jobs/`；正式结果仍由原有流程写入 `reports/` 和 `trajectories/`。
+
 ## 多模型 / 多厂商路由(models.json)
 
 并列预置各模型的 url+key,跑时 `--model` 一键切换,无需临时改配置。`models.json`(项目根目录,已 gitignore,含密钥):
@@ -127,6 +144,7 @@ agent-eval/
 │   ├── llm_judge/    #   LLM-as-judge 质量打分
 │   └── attributor/   #   错误归因(偏离点定位)
 ├── runner/run.py     # 单题/批量入口 + 判分 + 可选评测,产出报告
+├── ui/               # 本地可视化控制台(FastAPI + 原生 HTML/CSS/JS)
 ├── analysis/
 │   ├── metrics.py    # 离线指标 + 红绿灯 markdown 报告
 │   ├── pareto.py     # 三轴 ASCII 帕累托前沿

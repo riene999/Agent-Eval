@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent-Eval 评测平台</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">AE</div>
+      <div><strong>Agent-Eval</strong><span>评测平台</span></div>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-group">
+        <button class="nav-item active" data-page="overview"><span class="nav-icon">⌂</span>评测总览</button>
+      </div>
+      <div class="nav-title">评测资产</div>
+      <div class="nav-group">
+        <button class="nav-item" data-page="datasets"><span class="nav-icon">▤</span>数据集</button>
+        <button class="nav-item" data-page="models"><span class="nav-icon">◫</span>模型配置</button>
+      </div>
+      <div class="nav-title">评测工作台</div>
+      <div class="nav-group">
+        <button class="nav-item" data-page="launch"><span class="nav-icon">＋</span>发起评测</button>
+        <button class="nav-item" data-page="jobs"><span class="nav-icon">◷</span>任务记录</button>
+        <button class="nav-item" data-page="reports"><span class="nav-icon">▥</span>评测报告</button>
+        <button class="nav-item" data-page="traces"><span class="nav-icon">⑂</span>轨迹详情</button>
+      </div>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="local-badge"><span></span>本地工作空间</div>
+      <small>数据不会上传到外部平台</small>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="menu-button" id="menuButton" aria-label="打开菜单">☰</button>
+      <div>
+        <h1 id="pageTitle">评测总览</h1>
+        <p id="pageDescription">集中查看评测结果、运行状态与失败分布</p>
+      </div>
+      <div class="topbar-actions">
+        <span class="status-pill offline" id="proxyStatus"><i></i>代理检测中</span>
+        <button class="button secondary" id="refreshButton">刷新数据</button>
+      </div>
+    </header>
+
+    <section class="page active" id="page-overview">
+      <div class="notice" id="overviewNotice">
+        <span class="notice-icon">i</span>
+        <div><strong>本地评测工作台</strong><p>这里汇总已有报告与轨迹；运行新评测前，请确保 8080 端口的模型代理已经启动。</p></div>
+        <button class="text-button" data-go="launch">发起评测 →</button>
+      </div>
+
+      <div class="metric-grid" id="overviewMetrics"></div>
+
+      <div class="dashboard-grid">
+        <article class="panel latest-panel">
+          <div class="panel-head">
+            <div><h2>最近一次评测</h2><p>最新报告的核心指标</p></div>
+            <button class="text-button" data-go="reports">查看全部</button>
+          </div>
+          <div id="latestReport" class="empty-state">正在读取报告…</div>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div><h2>失败原因分布</h2><p>来自轨迹归因事件</p></div></div>
+          <div id="failureChart" class="bar-chart empty-state">暂无归因数据</div>
+        </article>
+      </div>
+
+      <article class="panel table-panel">
+        <div class="panel-head">
+          <div><h2>最近评测记录</h2><p>按报告生成时间倒序排列</p></div>
+          <button class="button secondary small" data-go="reports">全部报告</button>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>运行标识</th><th>Agent / 模型</th><th>题目</th><th>准确率</th><th>类型</th><th>时间</th><th>操作</th></tr></thead><tbody id="recentReportsBody"></tbody></table></div>
+      </article>
+    </section>
+
+    <section class="page" id="page-datasets">
+      <div class="toolbar">
+        <div class="field inline-field"><label>数据集名称</label><input id="datasetSearch" placeholder="输入名称筛选"></div>
+        <div class="field inline-field"><label>状态</label><select id="datasetStatus"><option value="">全部</option><option>可用</option><option>未安装</option></select></div>
+        <button class="button primary" id="datasetQuery">查询</button>
+        <button class="button ghost" id="datasetReset">重置</button>
+      </div>
+      <article class="panel table-panel">
+        <div class="panel-head"><div><h2>数据集</h2><p>管理当前项目已接入的评测任务资源</p></div><span class="count-text" id="datasetCount">共 0 个</span></div>
+        <div class="table-wrap"><table><thead><tr><th>数据集</th><th>任务分组</th><th>题目数</th><th>知识文档</th><th>工具数</th><th>状态</th><th>操作</th></tr></thead><tbody id="datasetsBody"></tbody></table></div>
+      </article>
+    </section>
+
+    <section class="page" id="page-models">
+      <div class="toolbar">
+        <div class="field inline-field wide"><label>模型名称</label><input id="modelSearch" placeholder="输入模型名或服务商"></div>
+        <button class="button primary" id="modelQuery">查询</button>
+        <button class="button ghost" id="modelReset">重置</button>
+      </div>
+      <div class="security-note"><span>●</span><div><strong>密钥安全</strong><p>本页只读取 models.json 中的模型名和接口地址，不会把 API Key 返回到浏览器。</p></div></div>
+      <article class="panel table-panel">
+        <div class="panel-head"><div><h2>模型配置</h2><p>可在发起评测时直接选择已配置模型</p></div><span class="count-text" id="modelCount">共 0 个</span></div>
+        <div class="table-wrap"><table><thead><tr><th>模型名称</th><th>服务商</th><th>请求方式</th><th>接口地址</th><th>配置状态</th></tr></thead><tbody id="modelsBody"></tbody></table></div>
+      </article>
+    </section>
+
+    <section class="page" id="page-launch">
+      <div class="launch-layout">
+        <form class="panel run-form" id="runForm">
+          <div class="section-heading"><span>1</span><div><h2>选择评测对象</h2><p>选择 Agent 链路、模型和测试集</p></div></div>
+          <div class="form-grid three">
+            <div class="field"><label>Agent 链路 *</label><select name="agent"><option value="react">ReAct</option><option value="plan_solve">Plan-Solve</option></select></div>
+            <div class="field"><label>被测模型 *</label><select name="model" id="runModel" required></select></div>
+            <div class="field"><label>数据集 *</label><select name="dataset" id="runDataset"><option value="tau_retail">τ-bench Retail</option><option value="enterprise_kb">企业知识问答</option></select></div>
+          </div>
+
+          <div class="section-heading"><span>2</span><div><h2>设置运行范围</h2><p>批量题目、重复次数与并发控制</p></div></div>
+          <div class="form-grid four">
+            <div class="field" id="splitField"><label>任务分组</label><select name="split"><option value="test">test</option><option value="train">train</option><option value="dev">dev</option></select></div>
+            <div class="field"><label>起始题号</label><input type="number" name="start" value="0" min="0"></div>
+            <div class="field"><label>题目数量</label><input type="number" name="count" value="5" min="1" max="1000"></div>
+            <div class="field"><label>同题运行次数</label><input type="number" name="trials" value="1" min="1" max="20"></div>
+            <div class="field"><label>并发数</label><input type="number" name="concurrency" value="1" min="1" max="32"></div>
+            <div class="field"><label>采样温度</label><input type="number" name="temperature" value="0" min="0" max="2" step="0.1"></div>
+            <div class="field"><label>随机种子</label><input type="number" name="seed" placeholder="不填则不传"></div>
+            <div class="field"><label>运行标识</label><input name="run_id" placeholder="不填则自动生成"></div>
+          </div>
+
+          <div class="section-heading"><span>3</span><div><h2>可选辅助分析</h2><p>默认关闭，开启后会额外消耗模型调用</p></div></div>
+          <div class="option-grid">
+            <label class="check-card"><input type="checkbox" name="llm_judge"><span class="check-ui"></span><div><strong>模型辅助评分</strong><small>从任务完成度、规则遵守和执行效率补充评分</small></div></label>
+            <label class="check-card"><input type="checkbox" name="attribution"><span class="check-ui"></span><div><strong>错误归因</strong><small>定位失败轨迹首次偏离的位置并给出原因</small></div></label>
+          </div>
+          <div class="form-grid two optional-settings">
+            <div class="field"><label>评分模型</label><select name="judge_model" id="judgeModel"><option value="">与被测模型相同</option></select></div>
+            <div class="field"><label>归因范围</label><select name="attribution_mode"><option value="failed_only">仅失败题</option><option value="all">全部题目</option><option value="sample_5">抽样 5 题</option><option value="sample_10">抽样 10 题</option></select></div>
+          </div>
+
+          <div class="form-actions">
+            <p><span id="launchProxyDot" class="dot"></span><span id="launchProxyText">正在检查模型代理</span></p>
+            <button class="button primary large" type="submit" id="runSubmit">开始评测</button>
+          </div>
+        </form>
+        <aside class="help-panel">
+          <h3>运行说明</h3>
+          <ol>
+            <li><strong>先启动代理</strong><span>另开终端运行<br><code>uv run python -m proxy.server</code></span></li>
+            <li><strong>再发起评测</strong><span>页面会在后台调用现有 runner，不改变任何执行逻辑。</span></li>
+            <li><strong>查看结果</strong><span>任务结束后，报告和轨迹会自动出现在对应页面。</span></li>
+          </ol>
+          <div class="help-tip">批量评测可能产生真实模型费用。建议先用 1～5 题确认配置正确。</div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="page" id="page-jobs">
+      <article class="panel table-panel">
+        <div class="panel-head"><div><h2>本次启动的任务</h2><p>任务记录保存在当前控制台进程中，报告会长期保存在 reports 目录</p></div><button class="button secondary small" id="jobsRefresh">刷新状态</button></div>
+        <div class="table-wrap"><table><thead><tr><th>运行标识</th><th>Agent / 模型</th><th>数据集</th><th>规模</th><th>状态</th><th>开始时间</th><th>操作</th></tr></thead><tbody id="jobsBody"></tbody></table></div>
+      </article>
+    </section>
+
+    <section class="page" id="page-reports">
+      <div class="toolbar">
+        <div class="field inline-field wide"><label>报告筛选</label><input id="reportSearch" placeholder="运行标识、Agent 或模型"></div>
+        <button class="button primary" id="reportQuery">查询</button>
+        <button class="button ghost" id="reportReset">重置</button>
+      </div>
+      <article class="panel table-panel">
+        <div class="panel-head"><div><h2>评测报告</h2><p>查看单次评测和多次稳定性试验结果</p></div><span class="count-text" id="reportCount">共 0 份</span></div>
+        <div class="table-wrap"><table><thead><tr><th>运行标识</th><th>Agent / 模型</th><th>规模</th><th>准确率</th><th>pass@N</th><th>失败归因</th><th>生成时间</th><th>操作</th></tr></thead><tbody id="reportsBody"></tbody></table></div>
+      </article>
+    </section>
+
+    <section class="page" id="page-traces">
+      <div class="toolbar trace-toolbar">
+        <div class="field inline-field"><label>Agent</label><input id="traceAgent" placeholder="react_agent_v1"></div>
+        <div class="field inline-field"><label>任务</label><input id="traceTask" placeholder="tau_retail_000"></div>
+        <div class="field inline-field"><label>运行标识</label><input id="traceRun" placeholder="run_id"></div>
+        <div class="field inline-field compact"><label>结果</label><select id="traceResult"><option value="all">全部</option><option value="success">成功</option><option value="failed">失败</option></select></div>
+        <button class="button primary" id="traceQuery">查询</button>
+        <button class="button ghost" id="traceReset">重置</button>
+      </div>
+      <article class="panel table-panel">
+        <div class="panel-head"><div><h2>轨迹查询</h2><p>按时间顺序查看模型调用、工具调用、返回结果和评测事件</p></div><span class="count-text" id="traceCount">共 0 条</span></div>
+        <div class="table-wrap"><table><thead><tr><th>任务</th><th>Agent</th><th>运行标识</th><th>事件数</th><th>结果</th><th>辅助分析</th><th>开始时间</th><th>操作</th></tr></thead><tbody id="tracesBody"></tbody></table></div>
+      </article>
+    </section>
+  </main>
+
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <aside class="drawer" id="traceDrawer" aria-hidden="true">
+    <div class="drawer-head"><div><small>轨迹详情</small><h2 id="drawerTitle">-</h2><p id="drawerSubtitle">-</p></div><button class="icon-button" id="drawerClose">×</button></div>
+    <div class="timeline" id="timeline"></div>
+  </aside>
+
+  <div class="modal-backdrop" id="modalBackdrop">
+    <section class="modal" role="dialog" aria-modal="true">
+      <header><div><small id="modalEyebrow">详情</small><h2 id="modalTitle">-</h2></div><button class="icon-button" id="modalClose">×</button></header>
+      <div class="modal-body" id="modalBody"></div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
