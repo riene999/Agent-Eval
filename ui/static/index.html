@@ -21,13 +21,20 @@
       <div class="nav-group">
         <button class="nav-item" data-page="datasets"><span class="nav-icon">▤</span>数据集</button>
         <button class="nav-item" data-page="models"><span class="nav-icon">◫</span>模型配置</button>
+        <button class="nav-item" data-page="skills"><span class="nav-icon">◇</span>Skill 管理</button>
       </div>
       <div class="nav-title">评测工作台</div>
       <div class="nav-group">
         <button class="nav-item" data-page="launch"><span class="nav-icon">＋</span>发起评测</button>
+        <button class="nav-item" data-page="skill_eval"><span class="nav-icon">◎</span>Skill 效果评测</button>
         <button class="nav-item" data-page="jobs"><span class="nav-icon">◷</span>任务记录</button>
         <button class="nav-item" data-page="reports"><span class="nav-icon">▥</span>评测报告</button>
+        <button class="nav-item" data-page="compare"><span class="nav-icon">⇄</span>评测对比</button>
         <button class="nav-item" data-page="traces"><span class="nav-icon">⑂</span>轨迹详情</button>
+      </div>
+      <div class="nav-title">数据闭环</div>
+      <div class="nav-group">
+        <button class="nav-item" data-page="exports"><span class="nav-icon">⇩</span>训练数据导出</button>
       </div>
     </nav>
 
@@ -108,6 +115,23 @@
       </article>
     </section>
 
+    <section class="page" id="page-skills">
+      <div class="toolbar">
+        <div class="field inline-field wide"><label>Skill 名称</label><input id="skillSearch" placeholder="输入名称、标识或业务域"></div>
+        <button class="button primary" id="skillQuery">查询</button>
+        <button class="button ghost" id="skillReset">重置</button>
+        <span class="toolbar-spacer"></span>
+        <button class="button secondary" id="skillTemplate">查看导入格式</button>
+        <button class="button primary" id="skillImport">导入 Skill</button>
+        <input type="file" id="skillFile" accept=".json,application/json" hidden>
+      </div>
+      <div class="security-note"><span>●</span><div><strong>安全导入</strong><p>Skill 文件只能组合项目已经注册的工具，不执行上传文件中的 Python 代码。</p></div></div>
+      <article class="panel table-panel">
+        <div class="panel-head"><div><h2>已安装 Skill</h2><p>每个 Skill 包含能力说明、使用规则、适用业务域和工具集合</p></div><span class="count-text" id="skillCount">共 0 个</span></div>
+        <div class="table-wrap"><table><thead><tr><th>Skill</th><th>业务域</th><th>版本</th><th>工具数</th><th>状态</th><th>操作</th></tr></thead><tbody id="skillsBody"></tbody></table></div>
+      </article>
+    </section>
+
     <section class="page" id="page-launch">
       <div class="launch-layout">
         <form class="panel run-form" id="runForm">
@@ -157,6 +181,53 @@
       </div>
     </section>
 
+    <section class="page" id="page-skill_eval">
+      <div class="skill-eval-layout">
+        <form class="panel run-form" id="skillEvalForm">
+          <div class="section-heading"><span>1</span><div><h2>选择测评方式</h2><p>单独检查一个 Skill，或比较加入新 Skill 前后的变化</p></div></div>
+          <div class="option-grid">
+            <label class="radio-card"><input type="radio" name="skill_eval_mode" value="single" checked><span><strong>单 Skill 评测</strong><small>同时测试能力内问题和范围外问题，检查效果与边界</small></span></label>
+            <label class="radio-card"><input type="radio" name="skill_eval_mode" value="n_plus_one"><span><strong>N+1 Skill 评测</strong><small>固定模型和题目，对比加入新 Skill 前后的能力增益与旧能力退化</small></span></label>
+          </div>
+
+          <div class="section-heading"><span>2</span><div><h2>配置 Skill 与模型</h2><p>单测时选择被测 Skill；N+1 时再勾选原有 Skill 集合</p></div></div>
+          <div class="form-grid two">
+            <div class="field"><label>被测 / 待新增 Skill *</label><select id="skillEvalTarget" required></select></div>
+            <div class="field"><label>被测模型 *</label><select id="skillEvalModel" required></select></div>
+          </div>
+          <div class="field skill-baseline-field hidden" id="skillBaselineField">
+            <label>原有 Skill 集合 *</label>
+            <div class="skill-check-grid" id="skillBaselinePicker"></div>
+            <small>候选组会在这些 Skill 的基础上自动加入上方待新增 Skill。</small>
+          </div>
+
+          <div class="section-heading"><span>3</span><div><h2>设置运行范围</h2><p>两组评测会使用相同题目、模型和采样参数</p></div></div>
+          <div class="form-grid four">
+            <div class="field"><label>起始题号</label><input type="number" name="start" value="0" min="0"></div>
+            <div class="field"><label>题目数量</label><input type="number" name="count" value="30" min="1" max="1000"></div>
+            <div class="field"><label>同题运行次数</label><input type="number" name="trials" value="1" min="1" max="20"></div>
+            <div class="field"><label>并发数</label><input type="number" name="concurrency" value="1" min="1" max="32"></div>
+            <div class="field"><label>采样温度</label><input type="number" name="temperature" value="0" min="0" max="2" step="0.1"></div>
+            <div class="field"><label>随机种子</label><input type="number" name="seed" placeholder="不填则不传"></div>
+            <div class="field"><label>运行标识</label><input name="run_id" placeholder="不填则自动生成"></div>
+          </div>
+          <div class="form-actions">
+            <p>评测使用企业知识问答数据，并生成标准报告与完整轨迹。</p>
+            <button class="button primary large" type="submit" id="skillEvalSubmit">开始 Skill 评测</button>
+          </div>
+        </form>
+        <aside class="help-panel">
+          <h3>如何看结果</h3>
+          <ol>
+            <li><strong>单 Skill</strong><span>重点看任务成功率、路由准确率和范围外问题识别率。</span></li>
+            <li><strong>N+1</strong><span>重点看新增后做对多少题、导致旧能力退化多少题，以及净收益。</span></li>
+            <li><strong>查看轨迹</strong><span>每次能力选择会记录为 Skill 路由事件，可定位从选错能力还是工具执行开始出错。</span></li>
+          </ol>
+          <div class="help-tip">N+1 会完整运行两组任务，模型费用约为同规模普通评测的两倍。</div>
+        </aside>
+      </div>
+    </section>
+
     <section class="page" id="page-jobs">
       <article class="panel table-panel">
         <div class="panel-head"><div><h2>本次启动的任务</h2><p>任务记录保存在当前控制台进程中，报告会长期保存在 reports 目录</p></div><button class="button secondary small" id="jobsRefresh">刷新状态</button></div>
@@ -176,6 +247,49 @@
       </article>
     </section>
 
+    <section class="page" id="page-compare">
+      <div class="compare-grid">
+        <article class="panel compare-form-panel">
+          <div class="panel-head"><div><h2>两次评测对比</h2><p>只比较两份报告中共同出现的题目，判断新版本是否退化</p></div></div>
+          <form id="compareForm" class="panel-body">
+            <div class="form-grid two">
+              <div class="field"><label>基线报告 *</label><select id="baselineReport" required></select><small>当前稳定版本或修改前结果</small></div>
+              <div class="field"><label>候选报告 *</label><select id="candidateReport" required></select><small>新模型、新提示词或新链路结果</small></div>
+            </div>
+            <h3 class="subsection-title">允许的最大退化</h3>
+            <div class="form-grid gate-grid">
+              <div class="field"><label>准确率下降</label><div class="input-suffix"><input id="gateAccuracy" type="number" value="3" min="0" max="100" step="0.5"><span>%</span></div></div>
+              <div class="field"><label>Token 增长</label><div class="input-suffix"><input id="gateTokens" type="number" value="20" min="0" step="1"><span>%</span></div></div>
+              <div class="field"><label>p95 延迟增长</label><div class="input-suffix"><input id="gateLatency" type="number" value="25" min="0" step="1"><span>%</span></div></div>
+              <div class="field"><label>成本增长</label><div class="input-suffix"><input id="gateCost" type="number" value="20" min="0" step="1"><span>%</span></div></div>
+              <div class="field"><label>重复调用比例增长</label><div class="input-suffix"><input id="gateRedundant" type="number" value="5" min="0" max="100" step="0.5"><span>%</span></div></div>
+            </div>
+            <div class="form-footer"><p>没有成本或延迟数据的检查项会自动跳过。</p><button class="button primary large" type="submit" id="compareSubmit">开始对比</button></div>
+          </form>
+        </article>
+        <article class="panel gate-result-panel">
+          <div class="panel-head"><div><h2>回归门禁</h2><p>不满足阈值时标记为未通过</p></div></div>
+          <div id="compareResult" class="empty-state">选择两份报告后开始对比</div>
+        </article>
+      </div>
+
+      <article class="panel table-panel comparison-detail-panel">
+        <div class="panel-head"><div><h2>指标变化</h2><p>正数表示候选版本更高；准确率越高越好，开销类指标越低越好</p></div><span class="count-text" id="pairedCount">尚未对比</span></div>
+        <div class="table-wrap"><table><thead><tr><th>指标</th><th>基线</th><th>候选</th><th>绝对变化</th><th>相对变化</th><th>95% 区间</th></tr></thead><tbody id="comparisonMetricsBody"><tr><td colspan="6"><div class="empty-state">暂无对比结果</div></td></tr></tbody></table></div>
+      </article>
+
+      <article class="panel trace-diff-panel">
+        <div class="panel-head"><div><h2>两条轨迹差异</h2><p>按工具调用顺序自动对齐，定位参数错误、选错工具、漏调和额外调用</p></div></div>
+        <form class="trace-diff-form" id="traceDiffForm">
+          <div class="field"><label>基线轨迹</label><select id="baselineTrace" required></select></div>
+          <div class="swap-mark">→</div>
+          <div class="field"><label>候选轨迹</label><select id="candidateTrace" required></select></div>
+          <button class="button primary" type="submit">查看差异</button>
+        </form>
+        <div id="traceDiffResult" class="empty-state">轨迹列表包含当前工作区已有记录，可先到“轨迹详情”按任务筛选确认运行标识</div>
+      </article>
+    </section>
+
     <section class="page" id="page-traces">
       <div class="toolbar trace-toolbar">
         <div class="field inline-field"><label>Agent</label><input id="traceAgent" placeholder="react_agent_v1"></div>
@@ -190,11 +304,45 @@
         <div class="table-wrap"><table><thead><tr><th>任务</th><th>Agent</th><th>运行标识</th><th>事件数</th><th>结果</th><th>辅助分析</th><th>开始时间</th><th>操作</th></tr></thead><tbody id="tracesBody"></tbody></table></div>
       </article>
     </section>
+
+    <section class="page" id="page-exports">
+      <div class="export-layout">
+        <form class="panel export-form" id="exportForm">
+          <div class="panel-head"><div><h2>生成训练数据</h2><p>把人工提供的正确轨迹导出为 SFT，或把正确/失败轨迹组成 DPO 偏好对</p></div></div>
+          <div class="panel-body">
+            <div class="option-grid export-kind-grid">
+              <label class="radio-card"><input type="radio" name="export_kind" value="sft" checked><span><strong>SFT 监督微调</strong><small>从企业知识问答的标准轨迹生成完整工具调用对话</small></span></label>
+              <label class="radio-card"><input type="radio" name="export_kind" value="dpo"><span><strong>DPO 偏好训练</strong><small>标准轨迹作为好答案，模型实际失败轨迹作为坏答案</small></span></label>
+            </div>
+            <div class="form-grid two export-fields">
+              <div class="field"><label>输出文件名 *</label><input id="exportFilename" value="enterprise_sft.jsonl" required></div>
+              <div class="field"><label>Agent 标识</label><input id="exportAgent" value="react_agent_v1"></div>
+              <div class="field dpo-only"><label>收集范围</label><select id="exportMode"><option value="failed_only">只收集失败题</option><option value="all">全部题目</option></select></div>
+              <div class="field dpo-only export-run-picker">
+                <div class="field-label-row"><label>评测运行标识 *</label><button class="text-button" type="button" id="dpoRunsRefresh">刷新轨迹</button></div>
+                <div class="run-picker" id="dpoRunPicker"><div class="picker-empty">正在读取已有轨迹…</div></div>
+                <small>勾选一个或多个企业知识问答评测批次；多试验的 `_t0/_t1` 会自动归为同一批次。</small>
+              </div>
+            </div>
+            <label class="plain-check dpo-only"><input type="checkbox" id="exportAppend">追加到已有文件并自动去重</label>
+            <div class="form-footer"><p>所有文件只会写入 <code>data/train</code>。</p><button class="button primary large" type="submit" id="exportSubmit">开始导出</button></div>
+          </div>
+        </form>
+        <article class="panel export-help">
+          <div class="panel-head"><div><h2>两种数据有什么区别？</h2></div></div>
+          <div class="help-copy"><strong>SFT：先教会模型正确做法</strong><p>每条数据是一段完整对话，包含问题、正确工具、参数、工具返回和最终答案。</p><strong>DPO：再让模型偏好正确做法</strong><p>每条数据包含同一问题下的一好一坏两条动作序列，让模型减少已观察到的错误。</p></div>
+        </article>
+      </div>
+      <article class="panel table-panel">
+        <div class="panel-head"><div><h2>已导出的文件</h2><p>可直接下载后交给 TRL、verl 等训练框架做格式转换或训练</p></div><button class="button secondary small" id="exportsRefresh">刷新</button></div>
+        <div class="table-wrap"><table><thead><tr><th>文件</th><th>数据条数</th><th>大小</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="exportsBody"></tbody></table></div>
+      </article>
+    </section>
   </main>
 
   <div class="drawer-backdrop" id="drawerBackdrop"></div>
   <aside class="drawer" id="traceDrawer" aria-hidden="true">
-    <div class="drawer-head"><div><small>轨迹详情</small><h2 id="drawerTitle">-</h2><p id="drawerSubtitle">-</p></div><button class="icon-button" id="drawerClose">×</button></div>
+    <div class="drawer-head"><div><small>轨迹详情</small><h2 id="drawerTitle">-</h2><p id="drawerSubtitle">-</p></div><div class="drawer-actions"><button class="button secondary small" id="replayButton">逐步回放</button><button class="icon-button" id="drawerClose">×</button></div></div>
     <div class="timeline" id="timeline"></div>
   </aside>
 

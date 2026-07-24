@@ -1,0 +1,10 @@
+{
+  "skill_id": "it_support",
+  "name": "IT 支持",
+  "description": "处理办公设备、IT 工单、VPN、密码和软件申请问题。",
+  "instructions": "查询员工设备前必须先通过姓名查询员工编号；操作流程必须以 IT 知识文档为准；不得猜测工单状态。",
+  "tools": ["find_employee_id", "get_it_asset", "get_ticket", "search_knowledge", "get_document"],
+  "domains": ["it"],
+  "version": "1.0.0",
+  "enabled": true
+}

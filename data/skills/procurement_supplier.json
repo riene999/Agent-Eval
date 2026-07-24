@@ -1,0 +1,10 @@
+{
+  "skill_id": "procurement_supplier",
+  "name": "采购与供应商",
+  "description": "处理采购流程、供应商评级和供应商管理问题。",
+  "instructions": "供应商信息必须通过供应商工具查询；采购流程必须以采购知识文档为依据。",
+  "tools": ["get_supplier", "search_knowledge", "get_document"],
+  "domains": ["procurement"],
+  "version": "1.0.0",
+  "enabled": true
+}

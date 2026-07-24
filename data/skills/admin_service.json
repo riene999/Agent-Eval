@@ -1,0 +1,10 @@
+{
+  "skill_id": "admin_service",
+  "name": "行政服务",
+  "description": "处理部门信息、会议室、门禁、用车等行政问题。",
+  "instructions": "结构化信息优先调用对应查询工具，制度流程必须查阅行政知识文档。",
+  "tools": ["get_department", "get_meeting_room", "search_knowledge", "get_document"],
+  "domains": ["admin"],
+  "version": "1.0.0",
+  "enabled": true
+}

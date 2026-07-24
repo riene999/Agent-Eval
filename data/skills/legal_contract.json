@@ -1,0 +1,10 @@
+{
+  "skill_id": "legal_contract",
+  "name": "法务与合同",
+  "description": "处理合同状态、合同审批、保密协议和印章制度问题。",
+  "instructions": "合同状态必须通过合同工具查询；流程和规则必须以法务知识文档为依据。",
+  "tools": ["get_contract", "search_knowledge", "get_document"],
+  "domains": ["legal"],
+  "version": "1.0.0",
+  "enabled": true
+}

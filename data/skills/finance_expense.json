@@ -1,0 +1,10 @@
+{
+  "skill_id": "finance_expense",
+  "name": "财务与报销",
+  "description": "处理差旅标准、报销额度、发票和报销制度问题。",
+  "instructions": "涉及员工报销标准时，先查询员工职级，再查询对应类别限额；制度问题必须查阅财务知识库。",
+  "tools": ["find_employee_id", "get_employee", "get_expense_limit", "get_reimbursement_policy", "search_knowledge", "get_document"],
+  "domains": ["finance"],
+  "version": "1.0.0",
+  "enabled": true
+}

@@ -18,6 +18,7 @@ runner ─ ReAct Agent ─┤                                    ├─→ traje
 跑后(可选)            ├─ LLM-judge   → llm_judge 事件
                               └─ 错误归因     → attribution 事件
 analysis/metrics.py ── 读 JSONL → 三轴指标 + 红绿灯 markdown 报告
+analysis/compare.py ── 两次评测配对比较 → 回归门禁 + JSON/Markdown 对比报告
 ```
 
 四类核心事件 `llm_call / tool_call / tool_return / final_output` 构成 Agent 轨迹;评测开关打开时再追加 `llm_judge / attribution` 两类。手写 ReAct,**不依赖 LangChain/LangGraph 等框架**。
@@ -102,7 +103,45 @@ uv run python -m ui.server --port 8090
 http://127.0.0.1:8090
 ```
 
-控制台当前包含：评测总览、数据集、模型配置、发起评测、任务日志、评测报告和轨迹详情。后台评测任务的临时日志写入 `reports/.jobs/`；正式结果仍由原有流程写入 `reports/` 和 `trajectories/`。
+控制台当前包含：评测总览、数据集、模型配置、Skill 管理、单 Skill/N+1 Skill 效果评测、发起评测、任务日志、评测报告、两次评测对比、轨迹详情/逐步回放/轨迹差异，以及 SFT/DPO 训练数据导出。报告页支持二次确认后真实删除对应 JSON/Markdown，但会保留原始轨迹。后台评测任务的临时日志写入 `reports/.jobs/`；正式结果仍由原有流程写入 `reports/` 和 `trajectories/`。
+
+## Skill 管理与效果评测
+
+本项目把 Skill 定义为“能力说明 + 使用规则 + 适用业务域 + 工具集合”。控制台可导入
+JSON 能力包；导入文件只能引用项目已注册工具，不执行其中的任意代码。内置示例位于
+`data/skills/`，格式如下：
+
+```json
+{
+  "skill_id": "hr_leave",
+  "name": "员工与休假",
+  "description": "处理员工身份、假期余额和人事制度问题。",
+  "instructions": "涉及具体员工时，必须先通过姓名查询员工编号。",
+  "tools": ["find_employee_id", "get_leave_balance", "search_knowledge"],
+  "domains": ["hr"],
+  "version": "1.0.0",
+  "enabled": true
+}
+```
+
+- **单 Skill 评测**：只启用一个 Skill，同时运行能力内和范围外任务，统计成功率、路由准确率、边界识别率、Skill 混淆率和跨 Skill 工具调用率。
+- **N+1 Skill 评测**：使用相同模型、题目、随机种子和采样参数，分别运行“原 Skill 集合”和“原集合 + 新 Skill”，报告新增后做对的题、受影响失败的旧题和净收益。
+
+```bash
+# 单 Skill
+uv run python -m runner.skill_eval --mode single --skill hr_leave \
+  --model deepseek-chat --run-id hr_single --count 30 --concurrency 5
+
+# N+1：在 HR、IT、财务能力上增加采购能力
+uv run python -m runner.skill_eval --mode n_plus_one \
+  --baseline-skills hr_leave,it_support,finance_expense \
+  --skill procurement_supplier --model deepseek-chat \
+  --run-id procurement_n1 --count 100 --concurrency 5
+```
+
+Skill Router 是独立 Agent：先在候选 Skill 中选择一个（都不适用则选 `none`），记录
+`skill_route` 事件，再只向执行阶段开放所选 Skill 的工具。任务若要精确指定标准 Skill，
+可增加 `expected_skill` 字段；未填写时，框架按任务 `domain` 与 Skill `domains` 自动匹配。
 
 ## 多模型 / 多厂商路由(models.json)
 
@@ -148,6 +187,9 @@ agent-eval/
 ├── analysis/
 │   ├── metrics.py    # 离线指标 + 红绿灯 markdown 报告
 │   ├── pareto.py     # 三轴 ASCII 帕累托前沿
+│   ├── compare.py    # 两份报告的配对比较、置信区间与回归门禁
+│   ├── alignment.py  # 工具动作序列对齐：参数错/工具错/漏调/多调
+│   ├── replay.py     # 历史轨迹离线回放与双轨迹差异
 │   └── export.py     # 评测产物 → 后训练数据(SFT / DPO)
 ├── data/enterprise_kb/ # 自建企业知识问答数据集(工具+文档+gold,git 跟踪)
 ├── models.json       # 多厂商路由(gitignore,含密钥)
@@ -163,6 +205,7 @@ agent-eval/
 | event_type | data 主要字段 |
 | --- | --- |
 | `llm_call` | role, model, request(完整请求体), response(完整响应), prompt_tokens, completion_tokens, latency_ms |
+| `skill_route` | available_skills, selected_skill, reason |
 | `tool_call` | tool_name, args |
 | `tool_return` | tool_name, result, error, latency_ms |
 | `final_output` | output, success, error |
@@ -177,9 +220,23 @@ agent-eval/
 
 每次运行写 `reports/<run_id>.md`:顶部红绿灯总览(🟢🟡🔴)、每题 ✅/❌ + token 条 + 冗余灯、规则失败原因;开了评测则追加"LLM 评分"与"失败归因(第 N 步:……)"两段。目标是让不了解评测的人也能一眼看出好坏。
 
+## 两次评测对比与回归门禁
+
+控制台的“评测对比”会按 `task_id` 取两份报告的共同题目，逐题配对后比较准确率、Token、工具调用、重复调用比例、p95 延迟和成本。默认门禁为：准确率最多下降 3 个百分点、Token/成本最多上涨 20%、p95 延迟最多上涨 25%、重复调用比例最多上涨 5 个百分点；页面可调整，缺失指标自动跳过。
+
+```bash
+# 命令行也可用于 CI；门禁不通过时进程退出码为 2
+uv run python -m analysis.compare \
+  --baseline reports/baseline.json \
+  --candidate reports/candidate.json \
+  --out reports/comparisons/baseline__candidate.json
+```
+
+轨迹差异使用编辑距离式动态规划对齐两串工具动作，优先匹配同名工具，再区分“参数不同、工具不同、候选漏调、候选多调”，并给出第一次偏离的 `seq`。逐步回放是**离线查看历史事件**，不会再次请求模型或执行工具，因而安全且可复现。
+
 ## 导出后训练数据(SFT / DPO)
 
-`analysis/export.py` 把评测产物转成后训练数据,喂给训练框架(LLaMA-Factory / TRL / verl 等)。输出默认落 `data/train/`(已 gitignore)。
+`analysis/export.py` 把评测产物转成后训练数据,喂给训练框架(LLaMA-Factory / TRL / verl 等)。输出默认落 `data/train/`(已 gitignore)，也可以在控制台的“训练数据导出”页面生成、预览和下载。
 
 | | SFT | DPO |
 | --- | --- | --- |
@@ -205,6 +262,8 @@ DPO 选项:`--agent`(默认 `react_agent_v1`)、`--mode failed_only`(默认,只�
 > 注意:DPO 按 `--run-id` **精确匹配** `<run_id>.jsonl` 与多试验的 `<run_id>_t*.jsonl`,不会前缀误吸其它实验(如 `ekb_ds_100_react` 不会把 `ekb_ds_100_react_qw` 卷进来)。
 >
 > 工具不写进 system prompt 文字、而是靠 `tools` 字段传——这是 function-calling 规范。训练时需用框架的 chat template 把 `tools.json` 与每条样本绑定(LLaMA-Factory 的 `tools` 字段 / TRL 的 `apply_chat_template(..., tools=...)`)。
+
+TRL 是 Hugging Face 提供的模型后训练库，封装了 `SFTTrainer`、`DPOTrainer` 等常见训练流程；它适合先在单机或常规多卡环境中验证 SFT/DPO。verl 更偏向大规模分布式强化学习和多轮工具环境。本项目目前负责生成和筛选训练数据，不在评测进程内启动训练。
 
 ## 扩展点(新增文件,不改主干)
 

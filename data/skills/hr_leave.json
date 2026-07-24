@@ -1,0 +1,10 @@
+{
+  "skill_id": "hr_leave",
+  "name": "员工与休假",
+  "description": "处理员工身份、假期余额、法定节假日、年假和人事制度问题。",
+  "instructions": "涉及具体员工时，必须先通过姓名查询员工编号；制度问题先检索知识库，必要时读取完整文档；不得编造假期天数。",
+  "tools": ["find_employee_id", "get_employee", "get_leave_balance", "list_holidays", "search_knowledge", "get_document"],
+  "domains": ["hr"],
+  "version": "1.0.0",
+  "enabled": true
+}

@@ -44,7 +44,11 @@ def make_agent(name: str, model: Optional[str] = None, temperature: float = 0.0)
         from agents.plan_solve import PlanSolveAgent
 
         return PlanSolveAgent(model=model, temperature=temperature)
-    raise SystemExit(f"未知 agent: {name!r}(可选:echo, react, plan_solve)")
+    if name == "skill_router":
+        from agents.skill_router import SkillRouterAgent
+
+        return SkillRouterAgent(model=model, temperature=temperature)
+    raise SystemExit(f"未知 agent: {name!r}(可选:echo, react, plan_solve, skill_router)")
 
 
 def make_task(task_id: str) -> Task:
@@ -139,6 +143,13 @@ def run_one(
                 # 路径保真(对 gold);非 tau 任务为 None,分析端自动跳过
                 "tool_selection": verdict.get("tool_selection"),
                 "arg_correctness": verdict.get("arg_correctness"),
+                "skill_expected": verdict.get("skill_expected"),
+                "skill_gold": verdict.get("skill_gold"),
+                "skill_selected": verdict.get("skill_selected"),
+                "skill_routing_correct": verdict.get("skill_routing_correct"),
+                "skill_scope_correct": verdict.get("skill_scope_correct"),
+                "skill_case_type": verdict.get("skill_case_type"),
+                "cross_skill_tool_rate": verdict.get("cross_skill_tool_rate"),
             },
         )
         if llm_judge:
@@ -226,6 +237,17 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                         help="基准随机种子,第 t 次试验用 seed+t(注入 LLM 请求,可复现)")
     parser.add_argument("--temperature", type=float, default=0.0,
                         help="采样温度;测多试验多样性建议 >0")
+    parser.add_argument(
+        "--skills",
+        default=None,
+        help="逗号分隔的 Skill ID；填写后把企业知识任务包装为 Skill 专项任务",
+    )
+    parser.add_argument(
+        "--skill-mode",
+        default=None,
+        choices=["single", "multi"],
+        help="写入报告的 Skill 评测类型",
+    )
     args = parser.parse_args(argv)
 
     _preflight_proxy()  # 代理没起就别开跑,免得对着死代理 churn 一整批
@@ -270,6 +292,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             return tid, trial_run_id, {"success": False, "score": 0.0, "reason": "批量已中止(代理不可达)"}
         seed = None if args.seed is None else args.seed + trial
         task = make_task(tid)
+        if args.skills:
+            if not tid.startswith("ekb_"):
+                raise ValueError("Skill 评测当前只支持 enterprise_kb 任务")
+            from tasks.skill_eval import SkillEvalTask
+
+            skill_ids = [item.strip() for item in args.skills.split(",") if item.strip()]
+            task = SkillEvalTask(task, skill_ids, eval_mode=args.skill_mode or "multi")
         path = trajectory_path(agent.agent_id, task.task_id, trial_run_id)
         if path.exists():
             path.unlink()
@@ -353,6 +382,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             "run_id": run_id,
             "agent_id": agent.agent_id,
             "model": getattr(agent, "model", None),
+            "skills": args.skills.split(",") if args.skills else None,
+            "skill_mode": args.skill_mode,
             "split": args.split if args.count is not None else None,
             "count": len(results),
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -380,6 +411,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             "run_id": run_id,
             "agent_id": agent.agent_id,
             "model": getattr(agent, "model", None),
+            "skills": args.skills.split(",") if args.skills else None,
+            "skill_mode": args.skill_mode,
             "split": args.split if args.count is not None else None,
             "trials": trials,
             "seed": args.seed,

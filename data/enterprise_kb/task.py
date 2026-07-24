@@ -28,6 +28,7 @@ class EnterpriseKBTask(Task):
     def __init__(self, spec: Dict[str, Any]) -> None:
         self.task_id = spec["id"]
         self.domain = spec.get("domain")
+        self.expected_skill = spec.get("expected_skill")
         self._question = spec["question"]
         self.gold_trajectory: List[Dict[str, Any]] = spec.get("gold_trajectory", [])
         self._reference_outputs: List[str] = spec.get("reference_outputs", [])

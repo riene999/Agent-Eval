@@ -27,9 +27,16 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-# 前 4 类是 Agent 自身的轨迹;后 2 类是可选的跑后评测结果(开关关闭时不会出现)
+# 前 5 类是 Agent 自身轨迹（skill_route 仅 Skill Router 产生）；
+# 后 2 类是可选跑后评测结果，开关关闭时不会出现。
 EventType = Literal[
-    "llm_call", "tool_call", "tool_return", "final_output", "llm_judge", "attribution"
+    "llm_call",
+    "skill_route",
+    "tool_call",
+    "tool_return",
+    "final_output",
+    "llm_judge",
+    "attribution",
 ]
 
 # 项目根目录:本文件位于 <root>/proxy/recorder.py

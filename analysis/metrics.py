@@ -92,6 +92,13 @@ def compute_metrics(events: List[Event]) -> Dict[str, Any]:
     attribution: Optional[Dict[str, Any]] = None
     tool_selection: Optional[float] = None
     arg_correctness: Optional[float] = None
+    skill_expected: Optional[str] = None
+    skill_gold: Optional[str] = None
+    skill_selected: Optional[str] = None
+    skill_routing_correct: Optional[bool] = None
+    skill_scope_correct: Optional[bool] = None
+    skill_case_type: Optional[str] = None
+    cross_skill_tool_rate: Optional[float] = None
     for e in events:
         if e.event_type == "llm_call":
             # 只统计被测 Agent,排除评测装置(用户模拟器/judge/归因)
@@ -118,6 +125,13 @@ def compute_metrics(events: List[Event]) -> Dict[str, Any]:
             # 这两项由 task 层(对 gold 比对)写入,非 tau 任务为 None
             tool_selection = e.data.get("tool_selection")
             arg_correctness = e.data.get("arg_correctness")
+            skill_expected = e.data.get("skill_expected")
+            skill_gold = e.data.get("skill_gold")
+            skill_selected = e.data.get("skill_selected")
+            skill_routing_correct = e.data.get("skill_routing_correct")
+            skill_scope_correct = e.data.get("skill_scope_correct")
+            skill_case_type = e.data.get("skill_case_type")
+            cross_skill_tool_rate = e.data.get("cross_skill_tool_rate")
         elif e.event_type == "llm_judge":  # 可选事件,旧轨迹没有则保持 None
             llm_score = e.data.get("overall")
         elif e.event_type == "attribution":
@@ -143,6 +157,13 @@ def compute_metrics(events: List[Event]) -> Dict[str, Any]:
         "arg_correctness": arg_correctness,
         "llm_score": llm_score,
         "attribution": attribution,
+        "skill_expected": skill_expected,
+        "skill_gold": skill_gold,
+        "skill_selected": skill_selected,
+        "skill_routing_correct": skill_routing_correct,
+        "skill_scope_correct": skill_scope_correct,
+        "skill_case_type": skill_case_type,
+        "cross_skill_tool_rate": cross_skill_tool_rate,
     }
 
 
@@ -222,6 +243,9 @@ def report_json(meta: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, A
             "avg_tool_calls": sum(r["tool_call_count"] for r in rows) / n,
             "failure_distribution": dict(_failure_counter(rows)),
         })
+        from analysis.skill_metrics import summarize_skill_rows
+
+        summary.update(summarize_skill_rows(rows))
     return {"meta": meta, "summary": summary, "tasks": rows}
 
 
@@ -247,6 +271,9 @@ def trials_json(
         "avg_pass_at_n": (sum(pn) / len(pn)) if pn else None,
         "failure_distribution": dict(_failure_counter(flat)),
     }
+    from analysis.skill_metrics import summarize_skill_rows
+
+    summary.update(summarize_skill_rows(flat))
     return {"meta": meta, "summary": summary, "tasks": tasks}
 
 
@@ -292,6 +319,26 @@ def build_report(meta: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
         lines.append(f"- 平均成本/题 ${costv:.4f}")
     if tsel is not None:
         lines.append(f"- 平均选工具准确率 {tsel:.0%} · 参数正确率 {(argc or 0):.0%}(对标准答案)")
+    from analysis.skill_metrics import summarize_skill_rows
+
+    skill_summary = summarize_skill_rows(rows)
+    if skill_summary:
+        route = skill_summary.get("routing_accuracy")
+        boundary = skill_summary.get("boundary_accuracy")
+        confusion = skill_summary.get("skill_confusion_rate")
+        lines.append(
+            f"- Skill 路由准确率 {(route or 0):.0%}"
+            + (
+                f" · 边界识别率 {boundary:.0%}"
+                if boundary is not None
+                else ""
+            )
+            + (
+                f" · Skill 混淆率 {confusion:.0%}"
+                if confusion is not None
+                else ""
+            )
+        )
     lines += [
         "",
         "## 每题指标",
@@ -367,6 +414,23 @@ def build_report(meta: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
             )
             if a.get("fix_suggestion"):
                 lines.append(f"    建议:{a['fix_suggestion']}")
+        lines.append("")
+
+    skill_rows = [r for r in rows if r.get("skill_case_type") is not None]
+    if skill_rows:
+        lines += [
+            "## Skill 路由与能力边界",
+            "",
+            "| 题 | 类型 | 应选 Skill | 实际选择 | 路由 | 跨 Skill 工具 |",
+            "| --- | --- | --- | --- | :---: | ---: |",
+        ]
+        for r in skill_rows:
+            lines.append(
+                f"| {r['task_id']} | {'适用' if r.get('skill_case_type') == 'in_scope' else '范围外'} "
+                f"| {r.get('skill_expected') or 'none'} | {r.get('skill_selected') or 'none'} "
+                f"| {'✅' if r.get('skill_routing_correct') else '❌'} "
+                f"| {(r.get('cross_skill_tool_rate') or 0):.0%} |"
+            )
         lines.append("")
 
     lines += _failure_dist_section(rows)

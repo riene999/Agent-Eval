@@ -3,8 +3,9 @@
 - SFT:从数据集的 gold_trajectory 渲染"正确的多轮 function-calling 对话"(执行只读工具补全
   工具返回),教模型何时调哪个工具、参数怎么填。无需跑模型。
   产 sft.jsonl(每行 {messages:[...]})+ tools.json(工具函数定义,供训练框架声明工具)。
-- DPO:对某次评测里**失败**的题:prompt=系统+问题,chosen=gold 正确动作,rejected=模型实际
-  (错误)动作,产 {prompt, chosen, rejected}(verl 的偏好/RM 三列、TRL DPO 文本格式通用)。
+- DPO:对某次评测里**失败**的题，找到 gold 与模型轨迹的首次分歧。公共前缀保留为
+  OpenAI 多轮 function-calling messages，chosen/rejected 是同一上下文下更好/更差的
+  下一条 assistant 消息。这样不会把工具调用降级成“调用工具 xxx”的普通文本。
 
 用法:
   python -m analysis.export sft --out data/train/sft.jsonl
@@ -52,37 +53,128 @@ def _derive_schema(fn: Callable[..., Any]) -> Dict[str, Any]:
         "parameters": {"type": "object", "properties": props, "required": required}}}
 
 
-def _args_str(args: Dict[str, Any]) -> str:
-    return ", ".join(f"{k}={v!r}" for k, v in (args or {}).items())
+def _json_text(value: Any) -> str:
+    """OpenAI tool 消息的 content 必须是字符串。"""
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
 
-def _gold_completion(gold: List[Dict[str, Any]]) -> str:
-    """把 gold_trajectory 渲染成可读的"动作序列"(DPO 的 chosen)。"""
-    lines = []
-    for s in gold:
-        if "tool" in s:
-            lines.append(f"调用工具 {s['tool']}({_args_str(s.get('args', {}))})")
-        elif "say" in s:
-            lines.append(f"回复用户:{s['say']}")
-        elif "final" in s:
-            lines.append(f"最终回答:{s['final']}")
-    return "\n".join(lines)
+def _tool_call_message(name: str, args: Dict[str, Any], call_id: str) -> Dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "id": call_id,
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": json.dumps(args or {}, ensure_ascii=False, sort_keys=True),
+            },
+        }],
+    }
 
 
-def _model_completion(events: List[Any]) -> str:
-    """从模型轨迹渲染它实际做的动作序列(DPO 的 rejected)。"""
-    lines = []
-    for e in sorted(events, key=lambda x: x.seq):
-        d = rehydrate(e.data)
-        if e.event_type == "tool_call":
-            lines.append(f"调用工具 {d.get('tool_name')}({_args_str(d.get('args', {}))})")
-        elif e.event_type == "final_output":
-            lines.append(f"最终回答:{d.get('output', '')}")
-    return "\n".join(lines)
+def _final_message(content: str) -> Dict[str, Any]:
+    return {"role": "assistant", "content": content or ""}
+
+
+def _gold_steps(gold: List[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], Dict[str, Any] | None]]:
+    """把 gold 变成 [(assistant 决策, 可选 tool observation)]。"""
+    steps: List[Tuple[Dict[str, Any], Dict[str, Any] | None]] = []
+    for i, item in enumerate(gold):
+        if "tool" in item:
+            name = item["tool"]
+            args = item.get("args", {}) or {}
+            call_id = f"call_gold_{i}"
+            fn = TOOLS_BY_NAME.get(name)
+            try:
+                result = fn(**args) if fn else f"Error: 未知工具 {name}"
+            except Exception as exc:
+                result = f"Error: {exc!r}"
+            observation = {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": _json_text(result),
+            }
+            steps.append((_tool_call_message(name, args, call_id), observation))
+        elif "say" in item:
+            steps.append((_final_message(item["say"]), None))
+        elif "final" in item:
+            steps.append((_final_message(item["final"]), None))
+    return steps
+
+
+def _model_steps(events: List[Any]) -> List[Tuple[Dict[str, Any], Dict[str, Any] | None]]:
+    """从真实事件恢复模型执行过的结构化动作与工具返回。"""
+    ordered = sorted(events, key=lambda event: event.seq)
+    returns = {
+        event.parent_seq: rehydrate(event.data)
+        for event in ordered
+        if event.event_type == "tool_return" and event.parent_seq is not None
+    }
+    steps: List[Tuple[Dict[str, Any], Dict[str, Any] | None]] = []
+    for event in ordered:
+        data = rehydrate(event.data)
+        if event.event_type == "tool_call":
+            name = data.get("tool_name", "")
+            args = data.get("args", {}) or {}
+            if not isinstance(args, dict):
+                continue
+            call_id = f"call_model_{event.seq}"
+            returned = returns.get(event.seq)
+            observation = None
+            if returned is not None:
+                result = returned.get("result")
+                if returned.get("error"):
+                    result = f"Error: {returned['error']}"
+                observation = {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": _json_text(result),
+                }
+            steps.append((_tool_call_message(name, args, call_id), observation))
+        elif event.event_type == "final_output":
+            steps.append((_final_message(data.get("output", "")), None))
+            break
+    return steps
+
+
+def _action_key(message: Dict[str, Any]) -> Tuple[Any, ...]:
+    """只比较决策语义，忽略随机 tool_call_id。"""
+    calls = message.get("tool_calls") or []
+    if calls:
+        fn = calls[0].get("function", {})
+        raw_args = fn.get("arguments", "{}") or "{}"
+        try:
+            args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+        except json.JSONDecodeError:
+            args = raw_args
+        return ("tool", fn.get("name", ""), json.dumps(args, ensure_ascii=False, sort_keys=True))
+    return ("final", (message.get("content") or "").strip())
+
+
+def _first_divergence(
+    gold_steps: List[Tuple[Dict[str, Any], Dict[str, Any] | None]],
+    model_steps: List[Tuple[Dict[str, Any], Dict[str, Any] | None]],
+) -> int | None:
+    """返回双方都存在下一动作的首次分歧位置；无法形成偏好对时返回 None。"""
+    for idx in range(min(len(gold_steps), len(model_steps))):
+        if _action_key(gold_steps[idx][0]) != _action_key(model_steps[idx][0]):
+            return idx
+    return None
+
+
+def _pair_key(row: Dict[str, Any]) -> str:
+    """结构化偏好对的稳定去重键。"""
+    return json.dumps(
+        [row.get("task_id"), row.get("messages"), row.get("rejected")],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
 
 
 def export_sft(out_path: Path) -> int:
     """从 gold 渲染多轮 function-calling SFT;另写 tools.json(工具定义)。"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     (out_path.parent / "tools.json").write_text(
         json.dumps([_derive_schema(t) for t in TOOLS], ensure_ascii=False, indent=2),
         encoding="utf-8")
@@ -120,19 +212,25 @@ def export_sft(out_path: Path) -> int:
 
 def export_dpo(run_ids: List[str], agent: str, mode: str, out_path: Path,
                append: bool = False) -> Tuple[int, int]:
-    """把一个或多个实验(run_ids)的评测轨迹,产出 {prompt, chosen(gold), rejected(模型)} 偏好对。
+    """导出“公共结构化前缀 + 首次分歧动作”的 DPO 偏好对。
 
     - run_ids:传多个实验,会一并扫进同一个输出文件。
     - append=True:追加到已有文件(而不是覆盖),用于后续新实验增量并入。
-    - 自动按 (题目, rejected) 去重:同一题同样的错误只收一次;同题不同的错法都保留(对 DPO 是好事)。
+    - 自动按 (题目, 公共前缀, rejected) 去重。
+    - chosen/rejected 只比较同一上下文中的下一次决策，避免把分叉后的 observation
+      错当作共同 prompt。
     """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tool_schemas = [_derive_schema(tool) for tool in TOOLS]
+    (out_path.parent / "tools.json").write_text(
+        json.dumps(tool_schemas, ensure_ascii=False, indent=2), encoding="utf-8")
     specs = _load_specs()
-    seen: set = set()  # (task_id, rejected) 去重键
+    seen: set[str] = set()
     if append and out_path.exists():  # 追加模式:先把已有的读进来,避免重复写
         for line in out_path.read_text(encoding="utf-8").splitlines():
             try:
                 r = json.loads(line)
-                seen.add((r.get("task_id"), r.get("rejected")))
+                seen.add(_pair_key(r))
             except Exception:
                 continue
     n, skipped = 0, 0
@@ -155,21 +253,37 @@ def export_dpo(run_ids: List[str], agent: str, mode: str, out_path: Path,
                     skipped += 1
                     continue
                 task = EnterpriseKBTask(spec)
-                chosen = _gold_completion(spec["gold_trajectory"])
-                rejected = _model_completion(events)
-                if chosen.strip() == rejected.strip():  # 模型做对且和 gold 一样,没偏好信号
+                gold_steps = _gold_steps(spec["gold_trajectory"])
+                model_steps = _model_steps(events)
+                divergence = _first_divergence(gold_steps, model_steps)
+                if divergence is None:
                     skipped += 1
                     continue
-                key = (events[0].task_id, rejected)
+                messages: List[Dict[str, Any]] = [
+                    {"role": "system", "content": task.system_prompt()},
+                    {"role": "user", "content": spec["question"]},
+                ]
+                for assistant_message, observation in gold_steps[:divergence]:
+                    messages.append(assistant_message)
+                    if observation is not None:
+                        messages.append(observation)
+                chosen = gold_steps[divergence][0]
+                rejected = model_steps[divergence][0]
+                row = {
+                    "messages": messages,
+                    "chosen": chosen,
+                    "rejected": rejected,
+                    "task_id": events[0].task_id,
+                    "success": success,
+                    "run_id": run_id,
+                    "divergence_step": divergence,
+                }
+                key = _pair_key(row)
                 if key in seen:  # 同题同错,已收录
                     skipped += 1
                     continue
                 seen.add(key)
-                f.write(json.dumps({
-                    "prompt": f"{task.system_prompt()}\n\n# 用户问题\n{spec['question']}",
-                    "chosen": chosen, "rejected": rejected,
-                    "task_id": events[0].task_id, "success": success, "run_id": run_id,
-                }, ensure_ascii=False) + "\n")
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
                 n += 1
     return n, skipped
 

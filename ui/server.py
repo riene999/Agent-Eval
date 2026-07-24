@@ -27,12 +27,18 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from analysis.compare import compare_files, to_markdown as comparison_markdown
+from analysis.export import export_dpo, export_sft
+from analysis.replay import compare_trace_files, replay_payload
 from proxy.recorder import PROJECT_ROOT, rehydrate
+from skills.registry import available_tool_names, get_skill, import_skill, list_skills
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 REPORTS_DIR = PROJECT_ROOT / "reports"
 TRAJECTORIES_DIR = PROJECT_ROOT / "trajectories"
 JOBS_DIR = REPORTS_DIR / ".jobs"
+COMPARISONS_DIR = REPORTS_DIR / "comparisons"
+TRAIN_DIR = PROJECT_ROOT / "data" / "train"
 
 app = FastAPI(title="Agent-Eval 评测控制台", version="0.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -56,6 +62,63 @@ class RunRequest(BaseModel):
     attribution: bool = False
     attribution_mode: str = "failed_only"
     judge_model: Optional[str] = None
+
+
+class CompareRequest(BaseModel):
+    """两份报告与可调回归阈值。"""
+
+    baseline_run_id: str
+    candidate_run_id: str
+    accuracy_drop_max: float = Field(default=0.03, ge=0.0, le=1.0)
+    token_increase_max: float = Field(default=0.20, ge=0.0, le=10.0)
+    latency_p95_increase_max: float = Field(default=0.25, ge=0.0, le=10.0)
+    cost_increase_max: float = Field(default=0.20, ge=0.0, le=10.0)
+    redundant_call_rate_increase_max: float = Field(default=0.05, ge=0.0, le=1.0)
+
+
+class TraceRef(BaseModel):
+    agent_id: str
+    task_id: str
+    run_id: str
+
+
+class TraceCompareRequest(BaseModel):
+    baseline: TraceRef
+    candidate: TraceRef
+
+
+class ExportRequest(BaseModel):
+    """训练数据导出只允许写入 data/train，避免网页传入任意路径。"""
+
+    kind: Literal["sft", "dpo"]
+    filename: str
+    run_ids: list[str] = Field(default_factory=list)
+    agent: str = "react_agent_v1"
+    mode: Literal["failed_only", "all"] = "failed_only"
+    append: bool = False
+
+
+class SkillImportRequest(BaseModel):
+    """浏览器读取本地 JSON 后提交，后端只保存通过校验的能力包。"""
+
+    skill: dict[str, Any]
+    overwrite: bool = False
+
+
+class SkillRunRequest(BaseModel):
+    """单 Skill 或 N+1 Skill 评测参数。"""
+
+    mode: Literal["single", "n_plus_one"]
+    skill: str
+    baseline_skills: list[str] = Field(default_factory=list)
+    model: str
+    run_id: Optional[str] = None
+    start: int = Field(default=0, ge=0)
+    count: int = Field(default=30, ge=1, le=1000)
+    trials: int = Field(default=1, ge=1, le=20)
+    concurrency: int = Field(default=1, ge=1, le=32)
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    seed: Optional[int] = None
 
 
 _JOBS: dict[str, dict[str, Any]] = {}
@@ -94,6 +157,7 @@ def _normalize_report(path: Path) -> dict[str, Any]:
     meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
     summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
     multi_trial = "avg_pass_at_1" in summary
+    report_kind = meta.get("kind")
     accuracy = summary.get("avg_pass_at_1") if multi_trial else summary.get("accuracy")
     task_count = summary.get("tasks") if multi_trial else summary.get("n")
     if task_count is None:
@@ -112,7 +176,11 @@ def _normalize_report(path: Path) -> dict[str, Any]:
         "avg_cost_usd": summary.get("avg_cost_usd"),
         "latency_p95": summary.get("latency_p95"),
         "failure_distribution": summary.get("failure_distribution") or {},
-        "kind": "多次试验" if multi_trial else "单次评测",
+        "kind": (
+            "N+1 Skill 评测"
+            if report_kind == "skill_n_plus_one"
+            else ("多次试验" if multi_trial else ("单 Skill 评测" if meta.get("skill_mode") else "单次评测"))
+        ),
         "mtime": path.stat().st_mtime,
     }
 
@@ -243,6 +311,9 @@ def _event_summary(event: dict[str, Any]) -> str:
 
     if kind == "llm_call":
         return f"{data.get('model', '模型调用')} · {data.get('prompt_tokens', 0)} + {data.get('completion_tokens', 0)} tokens · {number(data.get('latency_ms')):.0f} ms"
+    if kind == "skill_route":
+        selected = data.get("selected_skill") or "none"
+        return f"选择 {selected} · {str(data.get('reason', ''))[:120]}"
     if kind == "tool_call":
         args = json.dumps(data.get("args", {}), ensure_ascii=False)
         return f"调用 {data.get('tool_name', '-')} · {args[:120]}"
@@ -288,7 +359,10 @@ def _refresh_jobs() -> list[dict[str, Any]]:
                 job["log_handle"].close()
                 job["log_closed"] = True
         return [
-            {key: value for key, value in job.items() if key not in {"process", "log_handle"}}
+            {
+                **{key: value for key, value in job.items() if key not in {"process", "log_handle"}},
+                "report_exists": (REPORTS_DIR / f"{job['run_id']}.json").exists(),
+            }
             for job in sorted(_JOBS.values(), key=lambda item: item["started_at"], reverse=True)
         ]
 
@@ -354,13 +428,64 @@ def report_detail(run_id: str) -> dict[str, Any]:
     }
 
 
+def _safe_report_path(run_id: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", run_id):
+        raise HTTPException(status_code=400, detail="报告标识含有非法字符")
+    path = REPORTS_DIR / f"{run_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"未找到报告 {run_id}")
+    return path
+
+
+@app.delete("/api/reports/{run_id}")
+def delete_report(run_id: str) -> dict[str, Any]:
+    """真实删除一份报告的 JSON 与 Markdown，不触碰原始 trajectory。"""
+    json_path = _safe_report_path(run_id)
+    markdown_path = json_path.with_suffix(".md")
+    deleted: list[str] = []
+    try:
+        if markdown_path.exists():
+            markdown_path.unlink()
+            deleted.append(markdown_path.name)
+        json_path.unlink()
+        deleted.append(json_path.name)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"删除报告失败：{exc}") from exc
+    return {"run_id": run_id, "deleted": deleted, "trajectory_deleted": False}
+
+
+@app.post("/api/comparisons")
+def compare_reports(request: CompareRequest) -> dict[str, Any]:
+    """对共同任务做配对比较，并把本次门禁结果保存为独立报告。"""
+    baseline_path = _safe_report_path(request.baseline_run_id)
+    candidate_path = _safe_report_path(request.candidate_run_id)
+    if baseline_path == candidate_path:
+        raise HTTPException(status_code=400, detail="基线与候选报告不能相同")
+    thresholds = {
+        "accuracy_drop_max": request.accuracy_drop_max,
+        "token_increase_max": request.token_increase_max,
+        "latency_p95_increase_max": request.latency_p95_increase_max,
+        "cost_increase_max": request.cost_increase_max,
+        "redundant_call_rate_increase_max": request.redundant_call_rate_increase_max,
+    }
+    result = compare_files(baseline_path, candidate_path, thresholds)
+    comparison_id = f"{request.baseline_run_id}__{request.candidate_run_id}"
+    COMPARISONS_DIR.mkdir(parents=True, exist_ok=True)
+    (COMPARISONS_DIR / f"{comparison_id}.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    (COMPARISONS_DIR / f"{comparison_id}.md").write_text(
+        comparison_markdown(result), encoding="utf-8")
+    result["comparison_id"] = comparison_id
+    return result
+
+
 @app.get("/api/traces")
 def traces(
     agent: str = "",
     task: str = "",
     run: str = "",
     result: str = "all",
-    limit: int = Query(default=200, ge=1, le=500),
+    limit: int = Query(default=200, ge=1, le=2000),
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in _trace_files():
@@ -411,6 +536,251 @@ def event_detail(agent_id: str, task_id: str, run_id: str, seq: int) -> dict[str
             if event.get("seq") == seq:
                 return rehydrate(event)
     raise HTTPException(status_code=404, detail="未找到事件")
+
+
+@app.post("/api/replay")
+def replay_trace(reference: TraceRef) -> dict[str, Any]:
+    """返回完整历史事件供浏览器逐步播放，不重新执行模型和工具。"""
+    return replay_payload(_safe_trace_path(reference.agent_id, reference.task_id, reference.run_id))
+
+
+@app.post("/api/trace-diff")
+def trace_diff(request: TraceCompareRequest) -> dict[str, Any]:
+    baseline = _safe_trace_path(
+        request.baseline.agent_id, request.baseline.task_id, request.baseline.run_id)
+    candidate = _safe_trace_path(
+        request.candidate.agent_id, request.candidate.task_id, request.candidate.run_id)
+    if baseline == candidate:
+        raise HTTPException(status_code=400, detail="请选择两条不同轨迹")
+    return compare_trace_files(baseline, candidate)
+
+
+def _safe_export_name(filename: str) -> str:
+    name = Path(filename).name
+    if name != filename or not re.fullmatch(r"[A-Za-z0-9_.-]+\.jsonl", name):
+        raise HTTPException(status_code=400, detail="文件名只能包含字母、数字、点、横线和下划线，并以 .jsonl 结尾")
+    return name
+
+
+def _export_row(path: Path) -> dict[str, Any]:
+    rows = 0
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            rows = sum(1 for line in handle if line.strip())
+    except OSError:
+        pass
+    return {
+        "filename": path.name,
+        "rows": rows,
+        "size_bytes": path.stat().st_size,
+        "updated_at": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
+        "download_url": f"/api/exports/{path.name}",
+    }
+
+
+@app.get("/api/exports")
+def exports() -> list[dict[str, Any]]:
+    if not TRAIN_DIR.exists():
+        return []
+    paths = sorted(TRAIN_DIR.glob("*.jsonl"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return [_export_row(path) for path in paths]
+
+
+@app.get("/api/dpo-run-ids")
+def dpo_run_ids(agent: str = "react_agent_v1") -> list[dict[str, Any]]:
+    """列出可供企业知识问答 DPO 导出的逻辑运行批次。"""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", agent):
+        raise HTTPException(status_code=400, detail="Agent 标识含有非法字符")
+    root = TRAJECTORIES_DIR / agent
+    grouped: dict[str, dict[str, Any]] = {}
+    if not root.exists():
+        return []
+    for path in root.glob("ekb_*/*.jsonl"):
+        raw_run_id = path.stem
+        run_id = re.sub(r"_t\d+$", "", raw_run_id)
+        row = _trace_row(path)
+        item = grouped.setdefault(run_id, {
+            "run_id": run_id,
+            "trajectory_count": 0,
+            "task_ids": set(),
+            "failed_count": 0,
+            "success_count": 0,
+            "latest_mtime": 0.0,
+        })
+        item["trajectory_count"] += 1
+        item["task_ids"].add(row["task_id"])
+        item["latest_mtime"] = max(item["latest_mtime"], path.stat().st_mtime)
+        if row["success"] is True:
+            item["success_count"] += 1
+        elif row["success"] is False:
+            item["failed_count"] += 1
+    result = []
+    for item in grouped.values():
+        result.append({
+            "run_id": item["run_id"],
+            "trajectory_count": item["trajectory_count"],
+            "task_count": len(item["task_ids"]),
+            "failed_count": item["failed_count"],
+            "success_count": item["success_count"],
+            "updated_at": datetime.fromtimestamp(item["latest_mtime"]).isoformat(timespec="seconds"),
+        })
+    return sorted(result, key=lambda item: item["updated_at"], reverse=True)
+
+
+@app.post("/api/exports")
+def create_export(request: ExportRequest) -> dict[str, Any]:
+    name = _safe_export_name(request.filename)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", request.agent):
+        raise HTTPException(status_code=400, detail="Agent 标识含有非法字符")
+    TRAIN_DIR.mkdir(parents=True, exist_ok=True)
+    out = TRAIN_DIR / name
+    if request.kind == "sft":
+        count = export_sft(out)
+        skipped = 0
+    else:
+        if not request.run_ids:
+            raise HTTPException(status_code=400, detail="DPO 导出至少需要一个运行标识")
+        if any(not re.fullmatch(r"[A-Za-z0-9_.-]+", run_id) for run_id in request.run_ids):
+            raise HTTPException(status_code=400, detail="运行标识含有非法字符")
+        count, skipped = export_dpo(
+            request.run_ids, request.agent, request.mode, out, append=request.append)
+    preview = []
+    if out.exists():
+        with out.open("r", encoding="utf-8") as handle:
+            for _, line in zip(range(3), handle):
+                preview.append(line.strip()[:4000])
+    return {"file": _export_row(out), "written": count, "skipped": skipped, "preview": preview,
+            "tools_file": "tools.json" if request.kind == "sft" else None}
+
+
+@app.get("/api/exports/{filename}")
+def download_export(filename: str) -> FileResponse:
+    name = _safe_export_name(filename)
+    path = TRAIN_DIR / name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="未找到导出文件")
+    return FileResponse(path, media_type="application/x-ndjson", filename=name)
+
+
+def _skill_row(spec: Any) -> dict[str, Any]:
+    return {
+        **spec.model_dump(),
+        "tool_count": len(spec.tools),
+    }
+
+
+@app.get("/api/skills")
+def skills() -> dict[str, Any]:
+    """列出已安装 Skill 以及导入时可引用的安全工具名。"""
+    return {
+        "skills": [_skill_row(spec) for spec in list_skills(include_disabled=True)],
+        "available_tools": available_tool_names(),
+    }
+
+
+@app.get("/api/skills/{skill_id}")
+def skill_detail(skill_id: str) -> dict[str, Any]:
+    try:
+        return _skill_row(get_skill(skill_id, include_disabled=True))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/skills")
+def create_skill(request: SkillImportRequest) -> dict[str, Any]:
+    """导入声明式 Skill；不接受 Python 文件，也不会执行上传内容。"""
+    try:
+        spec = import_skill(request.skill, overwrite=request.overwrite)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _skill_row(spec)
+
+
+@app.post("/api/skill-runs")
+def create_skill_run(request: SkillRunRequest) -> dict[str, Any]:
+    configs = _model_configs()
+    if request.model not in configs:
+        raise HTTPException(status_code=400, detail=f"models.json 中没有模型 {request.model!r}")
+    try:
+        get_skill(request.skill)
+        for skill_id in request.baseline_skills:
+            get_skill(skill_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if request.mode == "n_plus_one" and not request.baseline_skills:
+        raise HTTPException(status_code=400, detail="N+1 评测至少需要一个原有 Skill")
+    if request.skill in request.baseline_skills:
+        raise HTTPException(status_code=400, detail="待新增 Skill 不能已经存在于原有 Skill 集合")
+
+    run_id = request.run_id or f"skill_{uuid4().hex[:10]}"
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", run_id):
+        raise HTTPException(status_code=400, detail="运行标识只能包含字母、数字、点、横线和下划线")
+    _refresh_jobs()
+    with _JOBS_LOCK:
+        if run_id in _JOBS and _JOBS[run_id]["status"] == "运行中":
+            raise HTTPException(status_code=409, detail="同名 Skill 评测正在运行")
+
+    command = [
+        sys.executable,
+        "-m",
+        "runner.skill_eval",
+        "--mode",
+        request.mode,
+        "--skill",
+        request.skill,
+        "--model",
+        request.model,
+        "--run-id",
+        run_id,
+        "--start",
+        str(request.start),
+        "--count",
+        str(request.count),
+        "--trials",
+        str(request.trials),
+        "--concurrency",
+        str(request.concurrency),
+        "--temperature",
+        str(request.temperature),
+    ]
+    if request.baseline_skills:
+        command.extend(["--baseline-skills", ",".join(request.baseline_skills)])
+    if request.seed is not None:
+        command.extend(["--seed", str(request.seed)])
+
+    JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = JOBS_DIR / f"{run_id}.log"
+    log_handle = log_path.open("w", encoding="utf-8")
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    process = subprocess.Popen(
+        command,
+        cwd=PROJECT_ROOT,
+        env=env,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    job = {
+        "job_id": run_id,
+        "run_id": run_id,
+        "agent": "skill_router",
+        "model": request.model,
+        "dataset": "Skill 专项评测",
+        "count": request.count,
+        "trials": request.trials,
+        "status": "运行中",
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "finished_at": None,
+        "log_path": str(log_path),
+        "process": process,
+        "log_handle": log_handle,
+    }
+    with _JOBS_LOCK:
+        _JOBS[run_id] = job
+    return {key: value for key, value in job.items() if key not in {"process", "log_handle"}}
 
 
 @app.get("/api/proxy-health")
