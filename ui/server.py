@@ -109,6 +109,7 @@ class SkillRunRequest(BaseModel):
     """单 Skill 或 N+1 Skill 评测参数。"""
 
     mode: Literal["single", "n_plus_one"]
+    agent: Literal["react", "plan_solve"] = "react"
     skill: str
     baseline_skills: list[str] = Field(default_factory=list)
     model: str
@@ -728,6 +729,8 @@ def create_skill_run(request: SkillRunRequest) -> dict[str, Any]:
         "runner.skill_eval",
         "--mode",
         request.mode,
+        "--agent",
+        request.agent,
         "--skill",
         request.skill,
         "--model",
@@ -766,7 +769,7 @@ def create_skill_run(request: SkillRunRequest) -> dict[str, Any]:
     job = {
         "job_id": run_id,
         "run_id": run_id,
-        "agent": "skill_router",
+        "agent": request.agent,
         "model": request.model,
         "dataset": "Skill 专项评测",
         "count": request.count,

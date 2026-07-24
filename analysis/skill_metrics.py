@@ -1,7 +1,7 @@
-"""单 Skill 与多 Skill 评测的聚合指标。
+"""单 Skill 与 N+1 提示词评测的聚合指标。
 
-本模块只消费通用每题指标，不参与 Agent 执行。旧报告没有 Skill 字段时返回空结果，
-因此不会影响 τ-bench、普通企业知识问答或历史轨迹。
+新数据只统计 Skill 提示词命中与任务效果；旧版路由轨迹仍按原字段聚合，保证历史
+报告可读取，但新评测不再把 Skill 当成独立 Agent 或模型路由。
 """
 
 from __future__ import annotations
@@ -21,21 +21,31 @@ def summarize_skill_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         values = [float(item[key]) for item in items if item.get(key) is not None]
         return sum(values) / len(values) if values else None
 
-    confusion = sum(
-        1
-        for row in in_scope
-        if row.get("skill_selected") not in {None, row.get("skill_expected")}
-    )
-    return {
+    result = {
         "skill_task_count": len(skill_rows),
         "in_scope_count": len(in_scope),
         "out_of_scope_count": len(out_scope),
         "in_scope_success_rate": average(in_scope, "accuracy"),
-        "routing_accuracy": average(skill_rows, "skill_routing_correct"),
-        "boundary_accuracy": average(out_scope, "skill_scope_correct"),
-        "skill_confusion_rate": confusion / len(in_scope) if in_scope else None,
-        "cross_skill_tool_rate": average(skill_rows, "cross_skill_tool_rate"),
+        "out_of_scope_success_rate": average(out_scope, "accuracy"),
     }
+    has_router_data = any(
+        row.get("skill_routing_correct") is not None for row in skill_rows
+    )
+    if has_router_data:
+        confusion = sum(
+            1
+            for row in in_scope
+            if row.get("skill_selected") not in {None, row.get("skill_expected")}
+        )
+        result.update(
+            {
+                "routing_accuracy": average(skill_rows, "skill_routing_correct"),
+                "boundary_accuracy": average(out_scope, "skill_scope_correct"),
+                "skill_confusion_rate": confusion / len(in_scope) if in_scope else None,
+                "cross_skill_tool_rate": average(skill_rows, "cross_skill_tool_rate"),
+            }
+        )
+    return result
 
 
 def compare_skill_runs(

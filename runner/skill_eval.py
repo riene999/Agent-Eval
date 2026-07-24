@@ -31,6 +31,7 @@ def _task_ids(start: int, count: int) -> list[str]:
 
 def _run_command(
     *,
+    agent: str,
     run_id: str,
     model: str,
     task_ids: list[str],
@@ -46,7 +47,7 @@ def _run_command(
         "-m",
         "runner.run",
         "--agent",
-        "skill_router",
+        agent,
         "--model",
         model,
         "--tasks",
@@ -107,7 +108,7 @@ def _write_n_plus_one_report(
     payload = {
         "meta": {
             "run_id": run_id,
-            "agent_id": "skill_router_v1",
+            "agent_id": candidate.get("meta", {}).get("agent_id"),
             "model": candidate.get("meta", {}).get("model"),
             "kind": "skill_n_plus_one",
             "candidate_skill": candidate_skill,
@@ -159,6 +160,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     load_env()
     parser = argparse.ArgumentParser(description="单 Skill / N+1 Skill 效果评测")
     parser.add_argument("--mode", choices=["single", "n_plus_one"], required=True)
+    parser.add_argument(
+        "--agent",
+        choices=["react", "plan_solve"],
+        default="react",
+        help="执行任务的 Agent 链路；Skill 仅追加提示词，不改变 Agent",
+    )
     parser.add_argument("--skill", required=True, help="单测或待新增的 Skill ID")
     parser.add_argument("--baseline-skills", default="", help="N+1 的原有 Skill，逗号分隔")
     parser.add_argument("--model", required=True)
@@ -178,6 +185,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     if args.mode == "single":
         _run_command(
+            agent=args.agent,
             run_id=args.run_id,
             model=args.model,
             task_ids=task_ids,
@@ -201,6 +209,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     baseline_id = f"{args.run_id}_baseline"
     candidate_id = f"{args.run_id}_plus"
     _run_command(
+        agent=args.agent,
         run_id=baseline_id,
         model=args.model,
         task_ids=task_ids,
@@ -212,6 +221,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         seed=args.seed,
     )
     _run_command(
+        agent=args.agent,
         run_id=candidate_id,
         model=args.model,
         task_ids=task_ids,

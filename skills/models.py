@@ -1,7 +1,7 @@
-"""Skill 配置的数据模型与输入校验。
+"""Skill 提示词模块的数据模型与输入校验。
 
-配置保持为普通 JSON，方便在界面导入、版本管理和跨环境复制。工具只记录注册名，
-实际可调用函数由 registry 在运行时安全解析。
+配置保持为普通 JSON，方便在界面导入、版本管理和跨环境复制。tools 仅描述提示词
+涉及的工具并用于校验和展示，不会据此替换或裁剪 Agent 原本可见的工具集合。
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class SkillSpec(BaseModel):
-    """一个可安装的 Agent 能力包。"""
+    """一个可安装、可组合的提示词模块。"""
 
     skill_id: str
     name: str

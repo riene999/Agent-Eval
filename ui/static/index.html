@@ -190,8 +190,9 @@
             <label class="radio-card"><input type="radio" name="skill_eval_mode" value="n_plus_one"><span><strong>N+1 Skill 评测</strong><small>固定模型和题目，对比加入新 Skill 前后的能力增益与旧能力退化</small></span></label>
           </div>
 
-          <div class="section-heading"><span>2</span><div><h2>配置 Skill 与模型</h2><p>单测时选择被测 Skill；N+1 时再勾选原有 Skill 集合</p></div></div>
-          <div class="form-grid two">
+          <div class="section-heading"><span>2</span><div><h2>配置 Agent、Skill 与模型</h2><p>Agent 决定执行方式，Skill 仅作为可插拔提示词追加到同一条链路</p></div></div>
+          <div class="form-grid three">
+            <div class="field"><label>Agent 链路 *</label><select id="skillEvalAgent" required><option value="react">ReAct</option><option value="plan_solve">Plan-Solve</option></select></div>
             <div class="field"><label>被测 / 待新增 Skill *</label><select id="skillEvalTarget" required></select></div>
             <div class="field"><label>被测模型 *</label><select id="skillEvalModel" required></select></div>
           </div>
@@ -219,9 +220,9 @@
         <aside class="help-panel">
           <h3>如何看结果</h3>
           <ol>
-            <li><strong>单 Skill</strong><span>重点看任务成功率、路由准确率和范围外问题识别率。</span></li>
+            <li><strong>单 Skill</strong><span>在选定 Agent 的系统提示词中加入一个 Skill，观察对应任务和其他任务的效果。</span></li>
             <li><strong>N+1</strong><span>重点看新增后做对多少题、导致旧能力退化多少题，以及净收益。</span></li>
-            <li><strong>查看轨迹</strong><span>每次能力选择会记录为 Skill 路由事件，可定位从选错能力还是工具执行开始出错。</span></li>
+            <li><strong>控制变量</strong><span>两组使用同一个 Agent、模型、工具和题目，只改变是否加入目标 Skill 提示词。</span></li>
           </ol>
           <div class="help-tip">N+1 会完整运行两组任务，模型费用约为同规模普通评测的两倍。</div>
         </aside>

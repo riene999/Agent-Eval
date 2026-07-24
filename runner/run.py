@@ -44,11 +44,7 @@ def make_agent(name: str, model: Optional[str] = None, temperature: float = 0.0)
         from agents.plan_solve import PlanSolveAgent
 
         return PlanSolveAgent(model=model, temperature=temperature)
-    if name == "skill_router":
-        from agents.skill_router import SkillRouterAgent
-
-        return SkillRouterAgent(model=model, temperature=temperature)
-    raise SystemExit(f"未知 agent: {name!r}(可选:echo, react, plan_solve, skill_router)")
+    raise SystemExit(f"未知 agent: {name!r}(可选:echo, react, plan_solve)")
 
 
 def make_task(task_id: str) -> Task:
@@ -143,8 +139,10 @@ def run_one(
                 # 路径保真(对 gold);非 tau 任务为 None,分析端自动跳过
                 "tool_selection": verdict.get("tool_selection"),
                 "arg_correctness": verdict.get("arg_correctness"),
+                "skills_enabled": verdict.get("skills_enabled"),
                 "skill_expected": verdict.get("skill_expected"),
                 "skill_gold": verdict.get("skill_gold"),
+                "skill_prompt_active": verdict.get("skill_prompt_active"),
                 "skill_selected": verdict.get("skill_selected"),
                 "skill_routing_correct": verdict.get("skill_routing_correct"),
                 "skill_scope_correct": verdict.get("skill_scope_correct"),

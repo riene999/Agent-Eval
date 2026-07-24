@@ -401,6 +401,7 @@ async function submitSkillEvaluation(event) {
   const numberOrNull = name => form.get(name) === "" ? null : Number(form.get(name));
   const payload = {
     mode,
+    agent: $("#skillEvalAgent").value,
     skill: $("#skillEvalTarget").value,
     baseline_skills: baseline,
     model: $("#skillEvalModel").value,
@@ -504,14 +505,26 @@ async function showReport(runId) {
     const cost = summary.avg_cost_usd ?? mean(metrics.map(item => item.cost_usd));
     const latency = summary.latency_p95 ?? mean(metrics.map(item => item.latency_p95));
     const failures = summary.failure_distribution || {};
-    const skillCards = summary.routing_accuracy == null ? "" : `
-      <h3 class="report-section-title">Skill 效果</h3>
-      <div class="report-summary">
-        <div><small>路由准确率</small><strong>${formatPct(summary.routing_accuracy)}</strong></div>
-        <div><small>范围外识别率</small><strong>${formatPct(summary.boundary_accuracy)}</strong></div>
-        <div><small>Skill 混淆率</small><strong>${formatPct(summary.skill_confusion_rate)}</strong></div>
-        <div><small>跨 Skill 工具调用</small><strong>${formatPct(summary.cross_skill_tool_rate)}</strong></div>
-      </div>`;
+    let skillCards = "";
+    if (summary.routing_accuracy != null) {
+      skillCards = `
+        <h3 class="report-section-title">Skill 效果（旧版路由数据）</h3>
+        <div class="report-summary">
+          <div><small>路由准确率</small><strong>${formatPct(summary.routing_accuracy)}</strong></div>
+          <div><small>范围外识别率</small><strong>${formatPct(summary.boundary_accuracy)}</strong></div>
+          <div><small>Skill 混淆率</small><strong>${formatPct(summary.skill_confusion_rate)}</strong></div>
+          <div><small>跨 Skill 工具调用</small><strong>${formatPct(summary.cross_skill_tool_rate)}</strong></div>
+        </div>`;
+    } else if (summary.skill_task_count != null) {
+      skillCards = `
+        <h3 class="report-section-title">Skill 提示词效果</h3>
+        <div class="report-summary">
+          <div><small>提示词命中任务</small><strong>${summary.in_scope_count ?? 0}</strong></div>
+          <div><small>命中任务成功率</small><strong>${formatPct(summary.in_scope_success_rate)}</strong></div>
+          <div><small>其他任务</small><strong>${summary.out_of_scope_count ?? 0}</strong></div>
+          <div><small>其他任务成功率</small><strong>${formatPct(summary.out_of_scope_success_rate)}</strong></div>
+        </div>`;
+    }
     const skillComparison = report.skill_evaluation;
     const nPlusCards = !skillComparison ? "" : `
       <h3 class="report-section-title">N+1 能力变化</h3>
