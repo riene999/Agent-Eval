@@ -8,6 +8,14 @@
 
 可选再叠加两层 LLM 维度的洞察:**LLM-as-judge**(质量打分)与**错误归因**(定位从哪一步开始偏离)。
 
+<img width="2556" height="1403" alt="image" src="https://github.com/user-attachments/assets/08652b35-3a52-4dce-801f-7445473c5f48" />
+<img width="2532" height="1388" alt="image" src="https://github.com/user-attachments/assets/00e04f8e-335d-4851-a281-7b1aaabcc924" />
+<img width="2547" height="1387" alt="image" src="https://github.com/user-attachments/assets/c61b279e-568d-4641-95b5-6baf71f90d5c" />
+<img width="2550" height="1381" alt="image" src="https://github.com/user-attachments/assets/26445672-5f55-47f9-b459-47b408ffb17c" />
+<img width="2546" height="1390" alt="image" src="https://github.com/user-attachments/assets/14cd2be3-7486-4492-afb7-aec7f58528ee" />
+<img width="2529" height="1383" alt="image" src="https://github.com/user-attachments/assets/1f21198b-f50c-4d1e-b9b0-a6354d5a0daf" />
+<img width="2528" height="1392" alt="image" src="https://github.com/user-attachments/assets/280b985a-0469-4fe9-ade0-5adf55165be5" />
+
 ## 架构总览
 
 ```
